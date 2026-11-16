@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/ericed", "crates/odiva-proto", "crates/odiva"]
+members = ["crates/ericed", "crates/odiva-proto", "crates/odiva", "crates/odiva-core"]
 resolver = "3"
 
 [workspace.package]
@@ -19,7 +19,19 @@ iced_widget = "0.14"
 # `ericed::motion` needs the frame subscription, which lives above the widgets.
 iced_runtime = "0.14"
 iced_futures = "0.14"
-tokio = { version = "1.54.1", features = ["fs"] }
+tokio = { version = "1.54.1", features = [
+    "fs",
+    "io-util",
+    "macros",
+    "process",
+    "rt-multi-thread",
+    "sync",
+    "time",
+] }
+tokio-util = { version = "0.7.20", features = ["compat"] }
+# `stdio` is the transport; `process` would only be for its own spawner, and we
+# spawn the child ourselves to choose its working directory.
+agent-client-protocol = { version = "5.3", features = ["stdio"] }
 iced_test = "0.14"
 png = "0.18"
 

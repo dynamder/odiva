@@ -16,7 +16,7 @@ M0 里就能验证最关键的假设：**任务状态在 core、会话可丢弃*
 | `crates/ericed` | vendor 自 `../sofaia`，编译通过，示例自带断言 |
 | `crates/odiva-proto` | 三个变体 + `CoreHandle`，零依赖 |
 | `crates/odiva` | 聊天窗口：markdown、文件、快捷回复、时间分隔、虚拟化、贴底与跟随；跑在 fixtures 上 |
-| `crates/odiva-core` | 设计定稿（006），代码未开始 |
+| `crates/odiva-core` | ACP 客户端：起进程、握手、一轮说完、拒绝权限；假 harness 三个脚本 |
 
 窗口的验证方式有两个，都在 CI 里跑：
 
@@ -27,11 +27,11 @@ M0 里就能验证最关键的假设：**任务状态在 core、会话可丢弃*
 
 M0 的切片顺序和每个切片的产物写在 006 末节 —— 这里不重复，避免两份清单漂移。
 
-协议瘦身已完成。下一个是切片 1：假 ACP harness + 官方 SDK 客户端，先把"spawn → 握手 → 一轮说完"钉住，再接真模型。
+切片 1（假 harness + SDK 客户端）和切片 2（协议瘦身）已完成。下一个是切片 3：`say` 加上 talk 激活，用 yoagent 的 `MockProvider` 跑通"一句话进、一条消息出"。
 
 ## 阻塞（不是设计问题）
 
-- 沙箱内进程拿不到 TLS（`SEC_E_NO_CREDENTIALS`）：`cargo add` 要在提权下跑一次，之后依赖留在本地 registry，`--offline` 照常。
+- 沙箱内进程拿不到 TLS（`SEC_E_NO_CREDENTIALS`）：`cargo add` / `cargo fetch` 要在提权下跑，之后依赖留在本地 registry，`--offline` 照常。
 - `dsh --profile acp` 首次启动要写 `~/.dsh/profiles/acp`。
 
 ## 待定

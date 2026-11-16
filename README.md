@@ -12,8 +12,8 @@ say. That is the whole design; see `docs/000-overview.md`.
 crates/
 ├── odiva-proto/   the seam: messages, presence, a `CoreHandle` trait. No deps.
 ├── odiva/         the chat window (iced). Holds no truth, only layout.
-├── ericed/        vendored from ../sofaia — widgets, palette, windowed list
-└── odiva-core/    not started: the design is docs/006-core.md
+├── odiva-core/    the core: the ACP client, and a harness that does as it is told
+└── ericed/        vendored from ../sofaia — widgets, palette, windowed list
 ```
 
 `docs/`:
@@ -44,11 +44,15 @@ means the protocol stopped being enough.
 
 `crates/odiva` and `crates/odiva-proto` are real, and the window runs on
 fixtures. The protocol is down to three variants: a message either arrived whole
-or did not arrive. `crates/odiva-core` has a settled design — [006](docs/006-core.md)
-— and no code: there is no agent behind the window and nothing talks to a harness
-yet.
+or did not arrive.
 
-The first line of it needs crates, and the sandboxed toolchain cannot fetch them
-(the TLS credential store is unreachable, so `cargo search` fails with
-`SEC_E_NO_CREDENTIALS`): `cargo add` has to run once with escalation. Separately,
-`dsh --profile acp` writes a profile directory on first launch.
+`crates/odiva-core` has begun at the far end from the window: it starts a harness
+in a child process, shakes hands, asks it one thing, and gets the whole turn
+back. Permissions are refused, because nobody is watching a worker. What is
+missing is everything between: there is no agent of its own yet — no conversation,
+no lanes, no `say` — so the window still has nothing to talk to. The design is
+[006](docs/006-core.md).
+
+Dependencies are fetched with escalation: the sandboxed toolchain cannot reach
+the TLS credential store, so `cargo add` and `cargo fetch` need it once. After
+that the tree builds with `--offline`.
