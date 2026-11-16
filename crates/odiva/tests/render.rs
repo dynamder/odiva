@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use iced::{Element, Size, Task, Theme, window};
 
-use odiva::{App, Message};
+use odiva::{App, Message, theme};
 use odiva_proto::{CoreMessage, FileRef, Presence, Side, Snapshot, WireMessage};
 
 fn attached(messages: Vec<WireMessage>) -> CoreMessage {
@@ -120,6 +120,8 @@ fn busy() -> Vec<CoreMessage> {
 /// Which conversation to photograph.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Fixture {
+    /// Nothing said yet — the first thing a new install shows.
+    Empty,
     Chat,
     Streaming,
     Busy,
@@ -128,6 +130,7 @@ enum Fixture {
 impl Fixture {
     fn script(self) -> Vec<CoreMessage> {
         match self {
+            Self::Empty => Vec::new(),
             Self::Chat => chat(),
             Self::Streaming => streaming(),
             Self::Busy => busy(),
@@ -139,6 +142,16 @@ struct Harness {
     fixture: Fixture,
     following: bool,
     light: bool,
+}
+
+impl Harness {
+    fn palette(&self) -> Theme {
+        if self.light {
+            theme::light()
+        } else {
+            theme::dark()
+        }
+    }
 }
 
 impl iced::Program for Harness {
@@ -161,7 +174,7 @@ impl iced::Program for Harness {
     }
 
     fn boot(&self) -> (App, Task<Message>) {
-        let mut app = App::empty();
+        let mut app = App::empty().with_theme(self.palette());
 
         for message in self.fixture.script() {
             app.apply(message);
@@ -183,11 +196,7 @@ impl iced::Program for Harness {
     }
 
     fn theme(&self, state: &App, _window: window::Id) -> Option<Theme> {
-        if self.light {
-            Some(Theme::Light)
-        } else {
-            Some(state.theme())
-        }
+        Some(state.theme())
     }
 }
 
@@ -203,6 +212,8 @@ fn target_dir() -> PathBuf {
 #[test]
 fn render_screenshots() {
     let cases = [
+        // The first screen a new install shows.
+        ("chat-empty", Fixture::Empty, true, false),
         ("chat", Fixture::Chat, true, false),
         // Mid-reply, scrolled away from the newest line: the state that decides
         // whether the scroll policy and the "jump to newest" affordance are
@@ -216,17 +227,15 @@ fn render_screenshots() {
     ];
 
     for (name, fixture, following, light) in cases {
+        let harness = Harness {
+            fixture,
+            following,
+            light,
+        };
+
         let shot = iced_test::screenshot(
-            &Harness {
-                fixture,
-                following,
-                light,
-            },
-            &if light {
-                Theme::Light
-            } else {
-                Theme::CatppuccinMocha
-            },
+            &harness,
+            &harness.palette(),
             Size::from((1040, 700)),
             1.0,
             Duration::from_millis(300),

@@ -11,6 +11,7 @@
 
 pub mod model;
 pub mod style;
+pub mod theme;
 pub mod view;
 
 use iced::{Element, Task as Command, Theme};
@@ -69,7 +70,7 @@ impl App {
             messages: snapshot.messages.into_iter().map(Msg::complete).collect(),
             draft: String::new(),
             presence: snapshot.presence,
-            theme: Theme::CatppuccinMocha,
+            theme: theme::dark(),
             pinned: true,
             outbox: Vec::new(),
         }
