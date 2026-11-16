@@ -54,8 +54,8 @@ impl AgentTool for RequestIdle {
     }
 
     fn description(&self) -> &str {
-        "现在想回到空闲：这一轮就地结束。要等某个任务动了，才会回到忙。\
-         手上有没落地的副作用时不要调它。"
+        "回到空闲，这一轮就地结束；要等某个任务动了才回到忙。\
+         副作用还悬着的时候别调它。"
     }
 
     fn parameters_schema(&self) -> Value {

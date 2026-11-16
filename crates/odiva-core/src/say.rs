@@ -80,8 +80,7 @@ impl AgentTool for Say {
     }
 
     fn description(&self) -> &str {
-        "把一句话发给对方。这是对方唯一能看见的东西：不调用它，对方就什么也不知道。\
-         一轮里可以调用多次，每次都是一条独立的消息。"
+        "把一条消息发到窗口上。不调用它，对方什么都不会看到。"
     }
 
     fn parameters_schema(&self) -> Value {

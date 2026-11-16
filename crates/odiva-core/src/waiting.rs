@@ -103,8 +103,8 @@ impl AgentTool for Yield {
     }
 
     fn description(&self) -> &str {
-        "有人在等你。在你觉得干净的地方停下：这一轮就此结束，你立刻去处理对方的请求。\
-         手上还有副作用没落下时不要调它。"
+        "只在有人等你时存在。调用就结束这一轮：你立刻去处理对方的请求。\
+         副作用还悬着的时候别调它。"
     }
 
     fn parameters_schema(&self) -> Value {
@@ -134,8 +134,7 @@ impl AgentTool for CancelYield {
     }
 
     fn description(&self) -> &str {
-        "明确拒绝转换：这是闲聊，或者你手上这件事比对方那句更急。\
-         调用之后 `yield` 会消失，你继续干；对方的话不会丢，只是排在后面。"
+        "拒绝转换：这一轮继续干，对方的话排在后面，不会丢。"
     }
 
     fn parameters_schema(&self) -> Value {

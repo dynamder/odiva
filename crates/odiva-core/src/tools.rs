@@ -55,8 +55,7 @@ impl AgentTool for Dispatch {
     }
 
     fn description(&self) -> &str {
-        "把一个活交给一个独立的 harness 进程去做，立刻返回。它有自己的目录、自己的模型、\
-         自己的死亡方式；干完会来找你。所以 brief 要自包含：它看不见这段对话。"
+        "把活交给一个独立的 worker 进程，立刻返回。它有自己的目录，会失败，也会干完回来找你。"
     }
 
     fn parameters_schema(&self) -> Value {
@@ -140,7 +139,7 @@ impl AgentTool for Read {
     }
 
     fn description(&self) -> &str {
-        "一个任务的全貌：它在等什么、报告、以及它最后说的话。"
+        "一个任务的全貌：在等什么、报告、它最后说的话。"
     }
 
     fn parameters_schema(&self) -> Value {
@@ -187,8 +186,7 @@ impl AgentTool for Answer {
     }
 
     fn description(&self) -> &str {
-        "给一个在等你说话的任务回一句，它会带着这句话重新开一轮。\
-         它不记得上一次的上下文，所以要交代清楚。"
+        "给一个在等你说话的任务回一句。它会带着原来的 brief、它上次说的话和你这句，重开一轮。"
     }
 
     fn parameters_schema(&self) -> Value {
@@ -232,7 +230,7 @@ impl AgentTool for Cancel {
     }
 
     fn description(&self) -> &str {
-        "停掉一个任务，进程就地结束。已经做出去的副作用不会撤回。"
+        "停掉一个任务，进程就地结束；已经做出去的副作用不会撤回。"
     }
 
     fn parameters_schema(&self) -> Value {
@@ -280,8 +278,7 @@ impl AgentTool for Permit {
     }
 
     fn description(&self) -> &str {
-        "回答一个停在权限请求上的任务。它问的是能不能动工作区外面，\
-         你自己不该替对方拍这个板：先把问题说给对方听，再按对方的回答调这个。"
+        "回答一个停在权限请求上的任务：能不能动工作区外面这一次。"
     }
 
     fn parameters_schema(&self) -> Value {
