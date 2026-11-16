@@ -4,6 +4,7 @@ description = "The chat window: a view of messages, and nothing else."
 edition.workspace = true
 version.workspace = true
 rust-version.workspace = true
+license.workspace = true
 publish.workspace = true
 
 [dependencies]

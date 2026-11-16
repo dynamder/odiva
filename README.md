@@ -74,3 +74,13 @@ is [006](docs/006-core.md).
 Dependencies are fetched with escalation: the sandboxed toolchain cannot reach
 the TLS credential store, so `cargo add` and `cargo fetch` need it once. After
 that the tree builds with `--offline`.
+
+## License
+
+Dual-licensed, at your option, under either
+
+- the [Apache License, Version 2.0](LICENSE-APACHE), or
+- the [MIT license](LICENSE-MIT).
+
+`crates/ericed` is vendored from the same author's `sofaia` and carries the same
+terms.

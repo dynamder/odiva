@@ -4,6 +4,7 @@ description = "The seam between the chat window and the core: messages, and noth
 edition.workspace = true
 version.workspace = true
 rust-version.workspace = true
+license.workspace = true
 publish.workspace = true
 
 # No dependencies, on purpose. This crate is the contract, and a contract that

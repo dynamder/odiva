@@ -7,8 +7,9 @@ categories = ["gui"]
 edition.workspace = true
 version.workspace = true
 rust-version.workspace = true
-# TODO(before publishing): add `license` and `repository`, then flip the
-# workspace's `publish = false`.
+# TODO(before publishing): add `repository`, then flip the workspace's
+# `publish = false`.
+license.workspace = true
 publish.workspace = true
 
 [dependencies]
