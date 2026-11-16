@@ -3,6 +3,8 @@
 记忆是一个**给 agent 用的工具**，不是窗口的后台缓存。它会主动搜，窗口不会替它预取。
 这条决定了下面全部：没有 embedding、没有隐式注入、没有"相关记忆"面板。
 
+**记忆只服务 idle。** busy 状态下记忆工具根本不存在（不是"禁止写"，是整个面不可用），所以任务细节不可能渗进来。要整理它们，等回到 idle，从任务卡与 transcript 取料。见 006。
+
 ## 存什么
 
 ```
@@ -21,19 +23,23 @@
 
 ## 谁写
 
-**daemon 是唯一写者。** agent 和 executor 只上报"事件"，落盘由 core 决定：什么时候进 journal、什么时候该蒸馏、哪条事实被取代。
+**daemon 是唯一写者。** agent 只上报"事件"，落盘由 core 决定：什么时候进 journal、什么时候该蒸馏、哪条事实被取代。
 
-这条是为了避免 N 个并行任务同时写同样的文件，也为了让写入路径能被测试。写入是 append-only 的 journal，蒸馏是周期性（或按量触发）的单独步骤，两者分开——所以蒸馏失败不会丢流水。
+写入是 append-only 的 journal，蒸馏是周期性（或按量触发）的单独步骤，两者分开——所以蒸馏失败不会丢流水。
+
+两个水位线回答"整理到哪了"：`consolidated_through`（已蒸馏到哪条消息）与 `indexed_through`（索引追到哪个文件）。它们让整理可续、可去重、可观测。
 
 ## 怎么读
 
-四个工具，接口先定死，后端可换：
+六个工具，接口先定死，后端可换：
 
 ```rust
 memory.search(query, k, since, path_glob) -> [Hit]
-memory.read(path, lines?) -> String
-memory.list(prefix, depth)      -> [Entry]   // 标题 + 日期，不是正文
-memory.append(path, content)    -> ()
+memory.read(path, lines?)                 -> String
+memory.list(prefix, depth)                -> [Entry]   // 标题 + 日期，不是正文
+memory.append(path, content)              -> ()
+memory.update(path, content)              -> ()
+memory.delete(path)                       -> ()
 ```
 
 **不用 embedding。** 个人规模（几千篇）下，BM25 加好的 md 结构就够；真正的失败模式不是"语义没算出来"，是**agent 不知道该搜什么词**（用户说"上周那个 HDR 的事"，原话里是别的词）。两个廉价补丁，都比向量检索便宜：
@@ -45,10 +51,12 @@ memory.append(path, content)    -> ()
 
 1. **中文分词。** 默认 tokenizer 按空格切，中文整段会变成一个 term，BM25 直接失效。必须换 jieba / lindera 一类，并且要处理中英混排 + 代码标识符。
 2. **字段加权。** `title` / `tags` / `body` / `date` 分别建字段，标题命中要比正文命中重要。
-3. **先 rg 后 tantivy。** 索引同步（新增/修改/删除/移动/改名）是一个不大但很烦的常驻成本。个人规模用 `rg` + 简单排序就能验证接口好不好用；接口确认好用再换，上层不动。
+3. **索引增量维护，`rg` 兜底。** 写入进脏队列，core 按批 commit；查询先查索引，脏区间用 `rg` 扫。索引仍然可以整目录删掉重建——这条让索引格式可以随便改。
 
 ## 和 executor 的关系
 
-记忆检索作为 **MCP server 透传进每个 ACP session**，所以 executor 也能查。它不必知道记忆怎么组织——那是 core 的实现；它只需要知道"有一个 search 工具"。
+**记忆不进 executor。** worker 只收一份自包含的 brief；harness 的工具集由用户配置（项目里的 AGENTS.md、skills、它自己的 MCP），我们不再往里注入额外规则。"我们替它决定它需要什么记忆"正是要避免的那种多余的东西。
 
-这样"互相通信"的两个方向就齐了：**ACP 向上（事件），MCP 向下（工具）**，不需要自己发明协议。
+worker 缺上下文就在报告里说，中间人下一轮补进新 brief。
+
+于是"互相通信"的两个方向仍然齐：**ACP 向上（事件），brief 向下（指令）**，不需要自己发明协议。

@@ -13,7 +13,7 @@ crates/
 ├── odiva-proto/   the seam: messages, presence, a `CoreHandle` trait. No deps.
 ├── odiva/         the chat window (iced). Holds no truth, only layout.
 ├── ericed/        vendored from ../sofaia — widgets, palette, windowed list
-└── odiva-core/    not started: agent loop, ACP client, memory
+└── odiva-core/    not started: the design is docs/006-core.md
 ```
 
 `docs/`:
@@ -26,6 +26,7 @@ crates/
 | [003](docs/003-plan.md) | milestones, and what is actually built |
 | [004](docs/004-memory.md) | markdown + tantivy, tool-first retrieval, no embeddings |
 | [005](docs/005-execution.md) | one middleman, N ACP workers, the task ledger |
+| [006](docs/006-core.md) | the core: agent = context + tools, lanes, `say`, budgets |
 
 ## Build
 
@@ -41,6 +42,12 @@ means the protocol stopped being enough.
 
 ## State
 
-`crates/odiva` and `crates/odiva-proto` are real. `crates/odiva-core` does not
-exist yet, so the window runs on fixtures — there is no agent behind it and
-nothing talks to a harness.
+`crates/odiva` and `crates/odiva-proto` are real, and the window runs on
+fixtures. `crates/odiva-core` has a settled design — [006](docs/006-core.md) —
+and no code: there is no agent behind the window and nothing talks to a harness
+yet.
+
+Two things block the first line of it: the sandboxed toolchain cannot fetch
+crates (the TLS credential store is unreachable, so `cargo search` fails with
+`SEC_E_NO_CREDENTIALS`), and `dsh --profile acp` writes a profile directory on
+first launch.

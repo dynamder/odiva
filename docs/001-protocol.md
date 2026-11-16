@@ -2,6 +2,10 @@
 
 UI 和 core 之间只有这一个面。UI 是 view，core 是唯一持有真值的地方。
 
+类型定义只有一处：`crates/odiva-proto/src/lib.rs`。这里只记约定 —— 把类型再抄一遍，只会让两边漂移。
+
+本文描述协议的**目标形状**。与当前代码的差异只有一处（流式的五个变体还没删），记在 [003](003-plan.md) 的"下一步"。
+
 ## 命名
 
 两个方向各一个 enum，**变体名是完整的句子：主体 + 动作 + 宾语**，不省略。同一个 match 里出现 `Turn(...)` 这种名字时，没人看得出它是"回合开始了"还是"回合结束了"。
@@ -13,58 +17,27 @@ UI 和 core 之间只有这一个面。UI 是 view，core 是唯一持有真值�
 
 不叫 `UiCommand`：TEA 里 `Cmd` 专指副作用，把"用户报告的事实"叫 Command 自相矛盾。
 
-## 类型
+## 三个变体
 
-```rust
-pub type MessageId = u64;
+| 变体 | 什么时候发 |
+| --- | --- |
+| `CoreAttachedSession { snapshot }` | 连接建立时的第一条，也是唯一的全量重建入口 |
+| `MessageAppended { message }` | 她说了一条完整的消息 |
+| `PresenceChanged { presence }` | 用户消息被接受即 `Typing`，直到本次激活结束 |
 
-pub enum Side { User, Assistant }
-pub enum Presence { Typing, Online }
-
-pub struct FileRef { pub name: String, pub size: String }
-
-/// 一条消息。正文是 markdown 字符串，不是结构化 block 数组——
-/// 于是"能发什么"的边界就是"聊天软件能发什么"。
-pub struct WireMessage {
-    pub id: MessageId,
-    pub from: Side,
-    /// 毫秒，Unix epoch。协议走 UTC，屏幕走本地。
-    pub sent: i64,
-    pub markdown: String,
-    pub files: Vec<FileRef>,
-    pub replies: Vec<String>,
-}
-
-pub struct Snapshot { pub messages: Vec<WireMessage>, pub presence: Presence }
-
-pub enum UiMessage {
-    UserSubmittedText { text: String },
-    UserRequestedStop,
-}
-
-pub enum CoreMessage {
-    CoreAttachedSession { snapshot: Snapshot },
-    MessageAppended { message: WireMessage },
-    MessageBegan { id: MessageId, sent: i64, from: Side },
-    MessageStreamedText { id: MessageId, delta: String },
-    MessageAttachedFile { id: MessageId, file: FileRef },
-    MessageOfferedReplies { id: MessageId, replies: Vec<String> },
-    MessageFinished { id: MessageId },
-    PresenceChanged { presence: Presence },
-}
-```
+她说话的唯一出口是 `say` 工具（见 006），所以消息**整条**到达：没有"半条消息"这个状态，也就不存在"正在输入永久卡住"这种失败模式。窗口想让文字逐字出现，那是窗口自己的动画，core 不参与。
 
 ## 五条约定
 
 1. **消息只能经 `CoreMessage` 改变。** UI 不做乐观回显：core 在同进程，一次 channel 送信的延迟可以忽略，换来的是只有一处真值。
-2. **流式文本先合并再发。** core 侧按 16~33ms 合并 token，`MessageStreamedText` 一次带一段。UI 不做节流。
-3. **一条消息以 `MessageBegan` 开始、以 `MessageFinished` 结束。** 异常路径也必须发 `MessageFinished`，否则 UI 的"正在输入"会永久卡住。
+2. **说话是一个工具，消息整条到达。** core 不合并 token、不做节流，也不发"开始/结束"标记。
+3. **一条消息只到达一次。** 重复的 `MessageAppended` 是协议错误，不是"同一句话的更新"。
 4. **`replies` 是文本。** 点一下等于替用户说那句话，core 收到的是 `UserSubmittedText`——它不需要知道你是打的还是点的。
 5. **时间是 UTC 毫秒，措辞是窗口的。** core 说"什么时候"，窗口决定写"今天 15:42"还是"周三 15:42"——后者要知道读者在哪个时区、今天是几号。这条边界和"core 决定说什么"是同一条：core 给事实，窗口给形式。
 
 ## 协议里有时间
 
-`WireMessage.sent` 和 `MessageBegan.sent` 是唯一的时间字段，都是 Unix 毫秒（UTC）。窗口据此决定分隔线的位置（间隔 ≥5 分钟或跨天）和它的措辞。时间不进 agent 的上下文——它只在显示层存在。
+`WireMessage.sent` 是唯一的时间字段，Unix 毫秒（UTC）。窗口据此决定分隔线的位置和措辞。时间不进 agent 的上下文——它只在显示层存在。
 
 ## 协议里没有 task
 

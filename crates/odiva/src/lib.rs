@@ -306,6 +306,9 @@ impl App {
     }
 
     /// Scrolls to the bottom, saying so, so [`Scroll`]'s copy stays honest.
+    ///
+    /// `Scrollable::anchor_bottom()` is unrelated: it moves the thumb when
+    /// there is nothing to scroll, and never moves the content.
     fn follow(&mut self) -> Command<Message> {
         if self.scroll.height() <= 0.0 {
             return Command::none();

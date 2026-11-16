@@ -8,15 +8,18 @@ odiva 是一个常驻桌面的助手，由三面组成：
 | 形象面 | Live2D，独立进程里的透明置顶窗口（wry） | 未开始 |
 | 执行面 | N 个 ACP harness 子进程，各自独立目录（见 005） | 未开始 |
 
-中间是**一个** agent。它不是"人格层"，也不是"调度层"——它是这个助手本人：读对话、决定派活、决定说什么。没有第二个模型替它说话。
+中间是**这个助手本人**：读对话、决定派活、决定说什么。不是"人格层"，也不是"调度层"，没有第二个模型替它说话。
+
+它不是一个常驻对象。**agent = 上下文 + 工具集**，换掉这两样就是换了一个 agent；常驻的只有引擎和磁盘上的存档（见 006）。所以"她"的连续性不在进程里，在 persona 和那些存档里。
 
 ```
 odiva (iced, 原生窗口)          stage (wry, Live2D, 透明置顶)
         │ UiMessage / CoreMessage        ▲ 单向指令
         ▼                                │
    odiva-core ───────────────────────────┘
-   ├── 主 agent（唯一持有对话上下文）
-   ├── ACP client ── N 个 harness 子进程（dsh / codex / pi …）
+   ├── Engine + Store（006）
+   ├── talk / work / roam 三条上下文线
+   ├── ACP client ── N 个 harness 子进程（dsh / opencode …）
    └── md 记忆 + tantivy 索引（见 004）
 ```
 
@@ -26,24 +29,19 @@ odiva (iced, 原生窗口)          stage (wry, Live2D, 透明置顶)
 2. **会话可丢弃，台账在磁盘。** ACP 的 `end_turn` 只代表"这一轮说完了"，不代表活干完；harness 会崩、会换。任务状态在 core 里持久化，会话是随时可替换的工人。
 3. **记忆是 md，索引可重建。** `journal/` 是流水，`facts/` 是蒸馏，`index/` 随时可以删了重来。
 
+这三条现在不是纪律，而是**构造性质**：agent 从不持有持久物，丢一个激活等于丢一个栈帧。理由在 006。
+
 ## Crate 结构
 
-```
-crates/
-├── odiva-proto/   协议：消息、presence、CoreHandle。零依赖，是唯一的契约
-├── odiva/         聊天窗口。不持有真值，只持有布局
-├── ericed/        vendor 自 ../sofaia：虚拟化列表、绘制期变换、调色板
-└── odiva-core/    未开始：agent loop、ACP client、记忆
-```
-
-`odiva-proto` 单独成 crate 的唯一目的，是让契约不可能悄悄引用 core 或 iced 的类型——用编译边界代替约定。
+划分与各自职责只在 README 的 Layout 一节。唯一值得在这里重复的是 `odiva-proto` 为什么单独成 crate：让契约不可能悄悄引用 core 或 iced 的类型——用编译边界代替约定。
 
 ## 为什么这么切
 
 - **聊天界面必须原生。** 跑在本地的工具不需要一个浏览器内核来画几行字；webview 的代价是进程外合成、IPC 边界、透明窗口的老坑，以及每个功能都要过一遍 JS。
 - **Live2D 例外，用 webview。** Cubism 生态事实上围绕 Web 建立（原生 SDK 的渲染器要从零写），而它只占屏幕一角，且是"单向显示设备"：只收指令，不回传任何东西。
 - **ericed 是现成的**（`crates/ericed`，vendor 自另一个项目，两边 iced 版本必须一起升）：虚拟化列表、绘制期变换、手势→意图的词表。它"加一个变体就编译失败"的性质，正好用来守 agent 事件与 UI 意图之间的边界。
-- **ACP 是执行层的唯一接口。** 原生支持与 adapter 已覆盖主流 harness；权限请求天然上行到 client；MCP 可以透传进每个 session，于是记忆检索也是 executor 能调的工具。但**不押注 ACP 的编排能力**——它没有，依赖、并发、重试全在 core 里。
+- **ACP 是执行层的唯一接口。** 原生支持与 adapter 已覆盖主流 harness；权限请求天然上行到 client；MCP 可以按需透传进某个 session（我们只透传，不消费）。但**不押注 ACP 的编排能力**——它没有，依赖、并发、重试全在 core 里。
+- **中间人不走 ACP。** 它是进程内的一次激活，直接收用户消息；harness 才是跨进程的那一层。少一层 ACP 就少一次序列化和一次模型上下文的重复。
 
 ## 借了 dsh-superagent 什么
 
@@ -51,7 +49,7 @@ crates/
 
 ## 明确不做
 
-- 人格模拟（情绪状态机、角色卡、主动搭话）。
+- 人格模拟（情绪状态机、角色卡）。主动开口不是人格：它是 idle 里一次受频率上限约束的 `say`，见 006。
 - 常驻轮询与闲置烧 token；一切事件驱动。
-- 自建 agent 框架与工具协议：harness 干活，MCP 给工具，ACP 传话。
+- 自建 agent 框架与工具协议：harness 干活，MCP 给外部能力，ACP 传话。
 - 多用户、多租户、权限模型。这是单人自用工具。
