@@ -119,8 +119,16 @@ fn transcript(app: &App) -> Element<'_, Message> {
 
     let fitted = sensor(reading).on_resize(Message::TranscriptResized);
 
+    // Always a `Stack`, even with a single child. iced keeps a widget's state by
+    // tag in the frame cache, so a tree that changes *type* when a boolean flips
+    // is a tree whose children are built from scratch — and the state at this
+    // position is the scroll offset. Losing it puts the viewport back at the top
+    // while the window still believes it is following, so the frame is sliced
+    // from the end of the conversation and drawn from the start of it.
+    let mut stack = Stack::new().push(fitted);
+
     if app.is_pinned() {
-        return fitted.into();
+        return stack.into();
     }
 
     let jump = container(
@@ -135,7 +143,9 @@ fn transcript(app: &App) -> Element<'_, Message> {
     .align_y(Alignment::End)
     .padding(Padding::new(0.0).right(24.0).bottom(14.0));
 
-    Stack::new().push(fitted).push(jump).into()
+    stack = stack.push(jump);
+
+    stack.into()
 }
 
 /// Nothing has been said yet.
