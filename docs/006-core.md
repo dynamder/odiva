@@ -172,12 +172,12 @@ tidy  = { used, limit }   # 整理，单独记账
 - mind：`MockProvider` + `ModelConfig::mock` 脚本化多轮工具调用，不联网就能钉住 `say` / dispatch / 协商 / 静默。
 - ACP：假 harness 进程（NDJSON 的 ACP server）钉住握手、流式、权限、崩溃、`end_turn` 分类。
 - Session：跑一轮 → `append_new` → 再跑一轮 → `append_new`，两次都不许 `HistoryDiverged`（我们在循环外压缩，这条应当永远成立）。
-- 窗口：留着的截图场景重跑，流式断言换成"三条消息三条气泡"。
+- 窗口：截图场景重跑；`every_say_is_one_whole_bubble` 钉住"一条消息一条气泡"。
 
 ## M0 切片
 
 1. 假 ACP harness + SDK 客户端：spawn → initialize → session/new → prompt → 收 update → end_turn。
-2. 协议瘦身：三变体 + 窗口删流式路径，截图重跑。
+2. 协议瘦身（已完成）：三变体 + 窗口删流式路径，截图重跑。
 3. `say` + talk 激活接真 yoagent，`MockProvider` 跑通"一句话进、一条消息出"。
 4. `dsh --profile acp` 接上真模型，跑通 M0 验收。
 5. 任务台账 + 两种等待 + `task_dispatch`。

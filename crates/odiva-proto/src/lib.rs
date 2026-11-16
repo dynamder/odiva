@@ -92,28 +92,18 @@ pub enum UiMessage {
 /// What the core reports.
 ///
 /// Flat on purpose: the window matches once, exhaustively, so a new variant
-/// breaks its build instead of falling into a `_` arm.
+/// breaks its build instead of falling into a `_` arm. There is no variant for a
+/// message in progress: speech is a tool the agent calls, and a tool call either
+/// happened or did not, so a message arrives whole or not at all.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CoreMessage {
     /// Always the first message of a connection.
     CoreAttachedSession { snapshot: Snapshot },
-    /// A complete message. The person's own line is echoed back here, because
-    /// the core owns the transcript.
+    /// A complete message, files and replies included. The person's own line is
+    /// echoed back here, because the core owns the transcript.
     MessageAppended { message: WireMessage },
-    /// A message that is still being written. It already carries its time.
-    MessageBegan {
-        id: MessageId,
-        sent: i64,
-        from: Side,
-    },
-    /// The next piece of it. The core coalesces tokens; the window does not
-    /// throttle.
-    MessageStreamedText { id: MessageId, delta: String },
-    MessageAttachedFile { id: MessageId, file: FileRef },
-    MessageOfferedReplies { id: MessageId, replies: Vec<String> },
-    /// The end of it, sent on every path including failure, or the window's
-    /// "typing…" never stops.
-    MessageFinished { id: MessageId },
+    /// Whether the contact line reads "typing": the agent is working on
+    /// something. Independent of messages, which arrive on their own schedule.
     PresenceChanged { presence: Presence },
 }
 

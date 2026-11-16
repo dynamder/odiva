@@ -14,24 +14,24 @@ M0 里就能验证最关键的假设：**任务状态在 core、会话可丢弃*
 | | 状态 |
 | --- | --- |
 | `crates/ericed` | vendor 自 `../sofaia`，编译通过，示例自带断言 |
-| `crates/odiva-proto` | 协议类型 + `CoreHandle`，零依赖。即将瘦身到三个变体（006） |
+| `crates/odiva-proto` | 三个变体 + `CoreHandle`，零依赖 |
 | `crates/odiva` | 聊天窗口：markdown、文件、快捷回复、时间分隔、虚拟化、贴底与跟随；跑在 fixtures 上 |
 | `crates/odiva-core` | 设计定稿（006），代码未开始 |
 
 窗口的验证方式有两个，都在 CI 里跑：
 
-- `crates/odiva/tests/protocol.rs`：`App::apply` 是唯一入口；400 条消息只建 <40 行；短对话有 headroom。
-- `crates/odiva/tests/render.rs`：六个场景出图（空、静止、流式、六任务、300 条、浅色），图在 `target/`。协议瘦身后剩五个。
+- `crates/odiva/tests/protocol.rs`：`App::apply` 是唯一入口；一条 `say` 一条气泡；400 条消息只建 <40 行；短对话有 headroom。
+- `crates/odiva/tests/render.rs`：六个场景出图（空、对话、干活中、六任务、300 条、浅色），图在 `target/`。
 
 ## 下一步
 
 M0 的切片顺序和每个切片的产物写在 006 末节 —— 这里不重复，避免两份清单漂移。
 
-前置动作是**协议瘦身**：proto 去掉流式的五个变体，窗口删掉对应的路径，渲染场景重跑。它必须先行，因为 `say` 依赖三个变体的协议。
+协议瘦身已完成。下一个是切片 1：假 ACP harness + 官方 SDK 客户端，先把"spawn → 握手 → 一轮说完"钉住，再接真模型。
 
 ## 阻塞（不是设计问题）
 
-- 沙箱内进程拿不到 TLS（`cargo search` 报 `SEC_E_NO_CREDENTIALS`），`yoagent` / `tantivy` 拉不下来。
+- 沙箱内进程拿不到 TLS（`SEC_E_NO_CREDENTIALS`）：`cargo add` 要在提权下跑一次，之后依赖留在本地 registry，`--offline` 照常。
 - `dsh --profile acp` 首次启动要写 `~/.dsh/profiles/acp`。
 
 ## 待定

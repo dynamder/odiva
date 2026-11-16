@@ -16,31 +16,16 @@ pub struct Msg {
     pub from: Side,
     /// When it was said, UTC milliseconds.
     pub sent: i64,
-    /// The source, kept because streaming appends to it.
+    /// The markdown `items` came from. Kept because the height estimate is made
+    /// from it.
     pub source: String,
     /// Parsed from `source`.
     pub items: Vec<markdown::Item>,
     pub files: Vec<FileRef>,
     pub replies: Vec<String>,
-    pub streaming: bool,
 }
 
 impl Msg {
-    /// A message that has started but has no text yet.
-    pub fn began(slot: usize, id: MessageId, sent: i64, from: Side) -> Self {
-        Self {
-            slot,
-            id,
-            from,
-            sent,
-            source: String::new(),
-            items: Vec::new(),
-            files: Vec::new(),
-            replies: Vec::new(),
-            streaming: true,
-        }
-    }
-
     /// A message that arrived whole.
     pub fn complete(slot: usize, message: WireMessage) -> Self {
         let items = markdown::parse(&message.markdown).collect();
@@ -54,17 +39,7 @@ impl Msg {
             items,
             files: message.files,
             replies: message.replies,
-            streaming: false,
         }
-    }
-
-    /// Appends a streamed piece.
-    ///
-    /// The whole message is re-parsed rather than the tail: a delta can open or
-    /// close a fence, so the block structure is a function of the entire source.
-    pub fn append(&mut self, delta: &str) {
-        self.source.push_str(delta);
-        self.items = markdown::parse(&self.source).collect();
     }
 
     /// Whether this message carries something that has to span the bubble.

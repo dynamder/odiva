@@ -43,11 +43,12 @@ means the protocol stopped being enough.
 ## State
 
 `crates/odiva` and `crates/odiva-proto` are real, and the window runs on
-fixtures. `crates/odiva-core` has a settled design — [006](docs/006-core.md) —
-and no code: there is no agent behind the window and nothing talks to a harness
+fixtures. The protocol is down to three variants: a message either arrived whole
+or did not arrive. `crates/odiva-core` has a settled design — [006](docs/006-core.md)
+— and no code: there is no agent behind the window and nothing talks to a harness
 yet.
 
-Two things block the first line of it: the sandboxed toolchain cannot fetch
-crates (the TLS credential store is unreachable, so `cargo search` fails with
-`SEC_E_NO_CREDENTIALS`), and `dsh --profile acp` writes a profile directory on
-first launch.
+The first line of it needs crates, and the sandboxed toolchain cannot fetch them
+(the TLS credential store is unreachable, so `cargo search` fails with
+`SEC_E_NO_CREDENTIALS`): `cargo add` has to run once with escalation. Separately,
+`dsh --profile acp` writes a profile directory on first launch.

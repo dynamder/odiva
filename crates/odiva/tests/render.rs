@@ -71,28 +71,13 @@ fn chat() -> Vec<CoreMessage> {
     ])]
 }
 
-/// The same conversation while another message is being written.
-fn streaming() -> Vec<CoreMessage> {
+/// The same conversation, with her working on the next thing: nothing new to
+/// read, and the composer offering to stop.
+fn working() -> Vec<CoreMessage> {
     let mut script = chat();
 
-    script.push(CoreMessage::MessageBegan {
-        id: 6,
-        sent: NOW,
-        from: Side::Assistant,
-    });
     script.push(CoreMessage::PresenceChanged {
         presence: Presence::Typing,
-    });
-    script.push(CoreMessage::MessageStreamedText {
-        id: 6,
-        delta: "README 那里改完了：命令从旧路径换成 `odiva acp --stdio`，另外补了一行依赖说明。\n\n"
-            .to_owned(),
-    });
-    script.push(CoreMessage::MessageStreamedText {
-        id: 6,
-        delta: "日志那边还有个发现——dsh 在 stdio 模式下把 **stderr 也写进了协议流**，\
-                所以握手读到的第一行不是 JSON-RPC，解析器直接把它当垃圾吞了，看起来就像超时。"
-            .to_owned(),
     });
 
     script
@@ -170,7 +155,7 @@ fn long() -> Vec<CoreMessage> {
 enum Fixture {
     Empty,
     Chat,
-    Streaming,
+    Working,
     Busy,
     Long,
 }
@@ -180,7 +165,7 @@ impl Fixture {
         match self {
             Self::Empty => Vec::new(),
             Self::Chat => chat(),
-            Self::Streaming => streaming(),
+            Self::Working => working(),
             Self::Busy => busy(),
             Self::Long => long(),
         }
@@ -267,7 +252,7 @@ fn render_screenshots() {
     let cases = [
         ("chat-empty", Fixture::Empty, true, false),
         ("chat", Fixture::Chat, true, false),
-        ("chat-streaming", Fixture::Streaming, false, false),
+        ("chat-working", Fixture::Working, true, false),
         ("chat-busy", Fixture::Busy, true, false),
         ("chat-long", Fixture::Long, false, false),
         ("chat-light", Fixture::Chat, true, true),

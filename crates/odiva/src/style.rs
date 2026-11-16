@@ -59,8 +59,6 @@ pub enum Surface {
     Quote,
     /// A code block: same plane as a quote, without the outline.
     Code,
-    /// The bar that shows a message is still arriving.
-    Caret,
 }
 
 impl Surface {
@@ -89,7 +87,6 @@ impl Surface {
             }
             Self::Quote => 8.0.into(),
             Self::Code => 6.0.into(),
-            Self::Caret => 1.0.into(),
         }
     }
 }
@@ -128,7 +125,6 @@ impl ContainerRecipe for Surface {
                 Length::Shrink,
                 false,
             ),
-            Self::Caret => (Padding::ZERO, Length::Fixed(2.0), Length::Fixed(15.0), false),
         };
 
         Frame {
@@ -156,7 +152,6 @@ impl ContainerRecipe for Surface {
             Self::Shell | Self::Header | Self::Footer => plain(tokens.canvas, tokens.text),
             Self::Bubble(Side::User, _) => plain(tokens.surface_selected, tokens.text),
             Self::Bubble(Side::Assistant, _) => plain(tokens.surface, tokens.text),
-            Self::Caret => plain(tokens.accent, tokens.accent),
             Self::Code => plain(tokens.canvas, tokens.text),
             Self::Quote => container::Style {
                 text_color: Some(tokens.text_muted),

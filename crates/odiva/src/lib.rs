@@ -19,7 +19,7 @@ use ericed::list::{Measured, Scroll, Slice, Slots, measured};
 use iced::widget::{operation, scrollable};
 use iced::{Element, Size, Task as Command, Theme};
 
-use odiva_proto::{CoreMessage, MessageId, Presence, Snapshot, UiMessage};
+use odiva_proto::{CoreMessage, Presence, Snapshot, UiMessage};
 
 use crate::style::column_width;
 
@@ -151,41 +151,6 @@ impl App {
                 self.slots.push();
                 self.estimate(slot);
             }
-            CoreMessage::MessageBegan { id, sent, from } => {
-                let slot = self.messages.len();
-                self.messages.push(model::Msg::began(slot, id, sent, from));
-                self.slots.push();
-                self.estimate(slot);
-            }
-            CoreMessage::MessageStreamedText { id, delta } => {
-                if let Some(slot) = self.message_mut(id).map(|msg| {
-                    msg.append(&delta);
-                    msg.slot
-                }) {
-                    self.estimate(slot);
-                }
-            }
-            CoreMessage::MessageAttachedFile { id, file } => {
-                if let Some(slot) = self.message_mut(id).map(|msg| {
-                    msg.files.push(file);
-                    msg.slot
-                }) {
-                    self.estimate(slot);
-                }
-            }
-            CoreMessage::MessageOfferedReplies { id, replies } => {
-                if let Some(slot) = self.message_mut(id).map(|msg| {
-                    msg.replies = replies;
-                    msg.slot
-                }) {
-                    self.estimate(slot);
-                }
-            }
-            CoreMessage::MessageFinished { id } => {
-                if let Some(msg) = self.message_mut(id) {
-                    msg.streaming = false;
-                }
-            }
             CoreMessage::PresenceChanged { presence } => self.presence = presence,
         }
 
@@ -286,9 +251,10 @@ impl App {
         self.pinned
     }
 
-    /// Whether the last message is still arriving.
-    pub fn is_streaming(&self) -> bool {
-        self.messages.last().is_some_and(|msg| msg.streaming)
+    /// Whether she is working on something, which is what the contact line and
+    /// the stop control both read.
+    pub fn is_working(&self) -> bool {
+        self.presence == Presence::Typing
     }
 
     /// What "now" is, for time labels.
@@ -344,9 +310,5 @@ impl App {
         let height = msg.estimated_height() + divider;
 
         self.slots.measure(slot, Size::new(column_width(), height));
-    }
-
-    fn message_mut(&mut self, id: MessageId) -> Option<&mut model::Msg> {
-        self.messages.iter_mut().find(|msg| msg.id == id)
     }
 }

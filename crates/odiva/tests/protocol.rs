@@ -37,81 +37,50 @@ fn a_snapshot_is_enough_to_draw_the_whole_window() {
     assert_eq!(app.messages().len(), 2);
     assert_eq!(app.messages()[0].from, Side::User);
     assert_eq!(app.presence(), Presence::Online);
-    assert!(!app.is_streaming());
 }
 
 #[test]
-fn a_streamed_message_grows_until_it_is_finished() {
+fn every_say_is_one_whole_bubble() {
     let mut app = App::empty();
 
-    let _ = app.apply(CoreMessage::MessageBegan {
-        id: 7,
-        sent: 0,
-        from: Side::Assistant,
-    });
-    assert!(app.is_streaming());
+    for (id, markdown) in [(1, "先查日志。"), (2, "日志里有 stderr。"), (3, "改完了。")] {
+        let _ = app.apply(CoreMessage::MessageAppended {
+            message: said(id, Side::Assistant, markdown),
+        });
+    }
 
-    let _ = app.apply(CoreMessage::MessageStreamedText {
-        id: 7,
-        delta: "# 结论\n\n握手超时是".to_owned(),
-    });
-    let _ = app.apply(CoreMessage::MessageStreamedText {
-        id: 7,
-        delta: "因为 stderr 混进了协议流。".to_owned(),
-    });
-
-    let msg = &app.messages()[0];
-    assert_eq!(msg.source, "# 结论\n\n握手超时是因为 stderr 混进了协议流。");
-    assert_eq!(msg.items.len(), 2);
-
-    let _ = app.apply(CoreMessage::MessageFinished { id: 7 });
-    assert!(!app.is_streaming());
-    assert!(!app.messages()[0].streaming);
+    let ids: Vec<_> = app.messages().iter().map(|msg| msg.id).collect();
+    assert_eq!(ids, vec![1, 2, 3]);
+    assert_eq!(app.messages()[1].source, "日志里有 stderr。");
 }
 
 #[test]
-fn finishing_an_unknown_message_is_not_a_panic() {
+fn files_and_replies_come_with_the_message() {
+    let mut message = said(3, Side::Assistant, "计划写好了。");
+    message.files.push(FileRef {
+        name: "本周计划.md".to_owned(),
+        size: "3.1 KB".to_owned(),
+    });
+    message.replies = vec!["好".to_owned()];
+
     let mut app = App::empty();
-
-    let _ = app.apply(CoreMessage::MessageFinished { id: 99 });
-    let _ = app.apply(CoreMessage::MessageStreamedText {
-        id: 99,
-        delta: "orphan".to_owned(),
-    });
-
-    assert!(app.messages().is_empty());
-    assert!(!app.is_streaming());
-}
-
-#[test]
-fn files_and_replies_attach_to_the_message_they_belong_to() {
-    let mut app = App::empty();
-
-    let _ = app.apply(CoreMessage::MessageBegan {
-        id: 3,
-        sent: 0,
-        from: Side::Assistant,
-    });
-    let _ = app.apply(CoreMessage::MessageStreamedText {
-        id: 3,
-        delta: "计划写好了。".to_owned(),
-    });
-    let _ = app.apply(CoreMessage::MessageAttachedFile {
-        id: 3,
-        file: FileRef {
-            name: "本周计划.md".to_owned(),
-            size: "3.1 KB".to_owned(),
-        },
-    });
-    let _ = app.apply(CoreMessage::MessageOfferedReplies {
-        id: 3,
-        replies: vec!["好".to_owned()],
-    });
-    let _ = app.apply(CoreMessage::MessageFinished { id: 3 });
+    let _ = app.apply(CoreMessage::MessageAppended { message });
 
     let msg = &app.messages()[0];
     assert_eq!(msg.files.len(), 1);
     assert_eq!(msg.replies, vec!["好".to_owned()]);
+}
+
+#[test]
+fn presence_is_the_cores_word() {
+    let mut app = App::empty();
+    assert!(!app.is_working());
+
+    let _ = app.apply(CoreMessage::PresenceChanged {
+        presence: Presence::Typing,
+    });
+
+    assert!(app.is_working());
 }
 
 #[test]

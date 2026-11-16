@@ -224,13 +224,6 @@ fn message_view<'a>(msg: &'a Msg, shape: Shape, theme: Theme) -> Element<'a, Mes
         body = body.push(replies);
     }
 
-    if msg.streaming {
-        body = body.push(
-            row![container(space::horizontal()).styled(Surface::Caret)]
-                .padding(Padding::new(2.0).top(1.0)),
-        );
-    }
-
     let bubble = container(body).styled(Surface::Bubble(msg.from, shape));
 
     // After `styled`, which lays the frame out: a `Fill` child of a `Shrink`
@@ -323,7 +316,7 @@ fn file_view(file: &FileRef) -> Element<'_, Message> {
 }
 
 /// The input, and the one button that matters: the send button becomes the stop
-/// control while a reply is arriving.
+/// control while she is working on something.
 fn composer(app: &App) -> Element<'_, Message> {
     let input = text_input("发消息…", app.draft())
         .on_input(Message::UserChangedDraft)
@@ -333,7 +326,7 @@ fn composer(app: &App) -> Element<'_, Message> {
         .width(Length::Fill)
         .style(input_style);
 
-    let action = if app.is_streaming() {
+    let action = if app.is_working() {
         button(text("停止").styled(Type::Body))
             .on_press(Message::UserRequestedStop)
             .padding([9.0, 18.0])
