@@ -12,6 +12,8 @@ Remember to update the doc to reflect the current codebase if you make some chan
 
 If you are writing a new feature, you should always search relevant code and try to reuse them when possible and doesn't contradiced with the primary rule.
 
+Git commit in small step, conventional commit, but don't prose about the commit message.
+
 ## Exploring
 
 When exploring the codebase, you should first evaluate its scale using tools like `cloc`, if it's huge, use subagents to do the exploration.
