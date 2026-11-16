@@ -156,3 +156,30 @@ async fn a_worker_that_asks_waits_on_a_verdict() {
         task.said
     );
 }
+
+#[tokio::test]
+async fn a_spent_day_does_not_follow_anyone_into_the_next_one() {
+    use odiva_core::budget::{self, Budget};
+
+    let store = odiva_core::Store::new(scratch("budget"));
+    let path = budget::path(&store);
+
+    let mut today = Budget::default();
+    assert!(today.charge_roam(1_000));
+    assert!(!today.charge_roam(u64::MAX));
+    today.save(&path).expect("a saved budget");
+
+    let reloaded = Budget::load(&path);
+    assert_eq!(reloaded.roam.used, 1_000);
+    assert_eq!(reloaded.date, today.date);
+
+    let yesterday = Budget {
+        date: "2020-01-01".to_owned(),
+        ..Budget::default()
+    };
+    yesterday.save(&path).expect("a stale budget");
+
+    let rolled = Budget::load(&path);
+    assert_eq!(rolled.roam.used, 0, "yesterday's spending is yesterday's");
+    assert_eq!(rolled.date, today.date);
+}

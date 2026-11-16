@@ -5,6 +5,7 @@
 //! plus a toolset, built when a turn starts and dropped when it ends.
 
 pub mod acp;
+pub mod budget;
 pub mod engine;
 pub mod error;
 pub mod handoff;
@@ -23,6 +24,7 @@ pub mod tools;
 pub mod waiting;
 
 pub use acp::{Stop, Turn, Worker};
+pub use budget::Budget;
 pub use engine::{Engine, Handle};
 pub use error::{Error, Result};
 pub use handoff::Handoff;

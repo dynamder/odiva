@@ -151,11 +151,13 @@ say { markdown: String, attach: Vec<PathBuf>, replies: Vec<String> }
 ## 预算
 
 ```
-contexts/budget.toml
-date  = "2026-11-16"      # 本地日历日，跨天重置
-roam  = { used, limit }   # 自由时段
-tidy  = { used, limit }   # 整理，单独记账
+contexts/budget.json
+{ "date": "2026-11-16",              // 本地日历日，跨天重置
+  "roam": { "used": 0, "limit": 300000 },
+  "tidy": { "used": 0, "limit": 60000 } }
 ```
+
+JSON 而不是 TOML：这是 core 自己读写的文件，不是给人手改的配置，省一个依赖。
 
 只约束 idle 的自 work；对话与任务不设预算 —— 用户说话不能因为钱被截断，用户在等的结果不能因为钱被截断。
 
