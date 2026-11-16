@@ -6,9 +6,9 @@
 
 use odiva_proto::WireMessage;
 use yoagent::Agent;
-use yoagent::types::AgentTool;
 
 use crate::error::Result;
+use crate::roster::Roster;
 use crate::route::Route;
 use crate::say::Said;
 use crate::store::{Lane, Log, Store};
@@ -29,17 +29,18 @@ impl Talk {
         store: &Store,
         route: &dyn Route,
         prompt: &str,
-        tools: Vec<Box<dyn AgentTool>>,
+        roster: Roster,
         said: Said,
     ) -> Result<Self> {
         let (lane, log) = store.open(Lane::Talk { generation: 0 }, prompt)?;
 
-        let agent = route
-            .agent()
-            .with_system_prompt(prompt)
-            .with_tools(tools)
-            .with_messages(log.history())
-            .without_context_management();
+        let agent = roster.install(
+            route
+                .agent()
+                .with_system_prompt(prompt)
+                .with_messages(log.history())
+                .without_context_management(),
+        );
 
         Ok(Self {
             agent,

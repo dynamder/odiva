@@ -3,12 +3,11 @@
 use std::path::PathBuf;
 
 use odiva_core::say::Said;
-use odiva_core::{Ids, Lane, Say, Scripted, Store, Talk};
+use odiva_core::{Ids, Lane, Roster, Say, Scripted, Store, Talk};
 use odiva_proto::{CoreMessage, Side};
 use serde_json::json;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use yoagent::provider::mock::{MockResponse, MockToolCall};
-use yoagent::types::AgentTool;
 
 const PROMPT: &str = "你是 odiva。";
 
@@ -56,8 +55,8 @@ fn shown(inbox: &mut UnboundedReceiver<CoreMessage>) -> Vec<(Side, String)> {
     messages
 }
 
-fn tools(out: UnboundedSender<CoreMessage>, ids: &Ids, said: &Said) -> Vec<Box<dyn AgentTool>> {
-    vec![Box::new(Say::new(out, ids.clone(), said.clone()))]
+fn tools(out: UnboundedSender<CoreMessage>, ids: &Ids, said: &Said) -> Roster {
+    Roster::of(vec![Box::new(Say::new(out, ids.clone(), said.clone()))])
 }
 
 #[tokio::test]
@@ -65,7 +64,7 @@ async fn one_turn_can_say_two_things_and_they_arrive_separately() {
     let store = scratch("talk-two-messages");
     let (out, mut inbox, ids) = window();
     let said = Said::default();
-    let route = Scripted::new(vec![saying("先说话，再干活。"), saying("干完了。"), done()]);
+    let route = Scripted::one(vec![saying("先说话，再干活。"), saying("干完了。"), done()]);
 
     let mut talk =
         Talk::open(&store, &route, PROMPT, tools(out, &ids, &said), said.clone()).expect("a lane");
@@ -86,14 +85,14 @@ async fn a_second_activation_continues_the_same_lane() {
     let store = scratch("talk-two-activations");
     let (out, mut inbox, ids) = window();
 
-    let first = Scripted::new(vec![saying("一"), done()]);
+    let first = Scripted::one(vec![saying("一"), done()]);
     let said = Said::default();
     let mut talk =
         Talk::open(&store, &first, PROMPT, tools(out.clone(), &ids, &said), said.clone())
             .expect("a lane");
     talk.turn(&ids.theirs("第一句")).await.expect("a turn");
 
-    let second = Scripted::new(vec![saying("二"), done()]);
+    let second = Scripted::one(vec![saying("二"), done()]);
     let said = Said::default();
     let mut talk = Talk::open(&store, &second, PROMPT, tools(out, &ids, &said), said.clone())
         .expect("a lane");
@@ -111,7 +110,7 @@ async fn the_lane_keeps_what_the_window_showed() {
     let store = scratch("talk-lane-record");
     let (out, _inbox, ids) = window();
     let said = Said::default();
-    let route = Scripted::new(vec![saying("在。"), done()]);
+    let route = Scripted::one(vec![saying("在。"), done()]);
 
     let mut talk =
         Talk::open(&store, &route, PROMPT, tools(out, &ids, &said), said.clone()).expect("a lane");
@@ -135,7 +134,7 @@ async fn a_missing_attachment_says_nothing() {
     let store = scratch("talk-missing-file");
     let (out, mut inbox, ids) = window();
     let said = Said::default();
-    let route = Scripted::new(vec![attaching("/nowhere/plan.md"), done()]);
+    let route = Scripted::one(vec![attaching("/nowhere/plan.md"), done()]);
 
     let mut talk =
         Talk::open(&store, &route, PROMPT, tools(out, &ids, &said), said.clone()).expect("a lane");
@@ -149,13 +148,13 @@ async fn a_new_prompt_opens_the_next_generation() {
     let store = scratch("talk-new-prompt");
     let (out, _inbox, ids) = window();
 
-    let route = Scripted::new(vec![saying("一"), done()]);
+    let route = Scripted::one(vec![saying("一"), done()]);
     let said = Said::default();
     let mut talk = Talk::open(&store, &route, "旧的话", tools(out.clone(), &ids, &said), said)
         .expect("a lane");
     talk.turn(&ids.theirs("第一句")).await.expect("a turn");
 
-    let route = Scripted::new(vec![saying("二"), done()]);
+    let route = Scripted::one(vec![saying("二"), done()]);
     let said = Said::default();
     let mut talk =
         Talk::open(&store, &route, "新的话", tools(out, &ids, &said), said).expect("a lane");

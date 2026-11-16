@@ -4,6 +4,7 @@
 //! the context and the toolset — both of which belong to the activation, not to
 //! a resident object. Tests substitute a script; nothing else has to change.
 
+use std::collections::VecDeque;
 use std::sync::Mutex;
 
 use yoagent::Agent;
@@ -32,32 +33,35 @@ impl Route for Model {
     }
 }
 
-/// A route that answers from a script, for tests.
+/// A route that answers from a script, one turn's worth at a time.
+///
+/// The unit is a turn, not a response, because an activation is built per turn:
+/// the third activation gets the third script and nothing earlier.
 pub struct Scripted {
-    responses: Mutex<Vec<MockResponse>>,
+    turns: Mutex<VecDeque<Vec<MockResponse>>>,
 }
 
 impl Scripted {
-    pub fn new(responses: Vec<MockResponse>) -> Self {
+    pub fn new(turns: Vec<Vec<MockResponse>>) -> Self {
         Self {
-            responses: Mutex::new(responses),
+            turns: Mutex::new(turns.into()),
         }
     }
 
-    /// One turn of plain text per line.
-    pub fn texts(lines: impl IntoIterator<Item = impl Into<String>>) -> Self {
-        Self::new(
-            lines
-                .into_iter()
-                .map(|line| MockResponse::Text(line.into()))
-                .collect(),
-        )
+    /// One activation, with this whole script.
+    pub fn one(responses: Vec<MockResponse>) -> Self {
+        Self::new(vec![responses])
     }
 }
 
 impl Route for Scripted {
     fn agent(&self) -> Agent {
-        let script = std::mem::take(&mut *self.responses.lock().expect("no panic while scripting"));
+        let script = self
+            .turns
+            .lock()
+            .expect("no panic while scripting")
+            .pop_front()
+            .unwrap_or_default();
 
         Agent::from_provider(MockProvider::new(script), ModelConfig::mock())
     }
