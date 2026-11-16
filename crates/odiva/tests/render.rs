@@ -236,16 +236,21 @@ impl iced::Program for Harness {
     fn boot(&self) -> (App, Task<Message>) {
         let mut app = App::empty()
             .with_theme(self.palette())
-            .with_clock(NOW)
-            // The transcript band of a 1040x700 window: the header, two hairlines
-            // and the composer take the rest.
-            .with_viewport(583.0);
+            .with_clock(NOW);
 
         for message in self.fixture.script() {
             let _ = app.apply(message);
         }
 
-        (app.following(self.following), Task::none())
+        // After the script, because attaching a session ends with a scroll to the
+        // bottom: the viewport is what a *window* knows, and saying it last is
+        // saying "this is the window, and it is showing the top".
+        //
+        // The transcript band of a 1040x700 window: the header, two hairlines and
+        // the composer take the rest.
+        let app = app.with_viewport(583.0).following(self.following);
+
+        (app, Task::none())
     }
 
     fn update(&self, state: &mut App, message: Message) -> Task<Message> {
@@ -287,7 +292,7 @@ fn render_screenshots() {
         // The one that decides the design: six jobs, two messages.
         ("chat-busy", Fixture::Busy, true, false),
         // 300 messages, one screenful built.
-        ("chat-long", Fixture::Long, true, false),
+        ("chat-long", Fixture::Long, false, false),
         // The same description rendered by another theme, which is the claim a
         // palette makes.
         ("chat-light", Fixture::Chat, true, true),
