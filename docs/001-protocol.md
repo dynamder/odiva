@@ -29,6 +29,7 @@ pub struct WireMessage {
     pub id: MessageId,
     pub from: Side,
     /// 毫秒，Unix epoch。协议走 UTC，屏幕走本地。
+    pub sent: i64,
     pub markdown: String,
     pub files: Vec<FileRef>,
     pub replies: Vec<String>,
@@ -53,7 +54,7 @@ pub enum CoreMessage {
 }
 ```
 
-## 四条约定
+## 五条约定
 
 1. **消息只能经 `CoreMessage` 改变。** UI 不做乐观回显：core 在同进程，一次 channel 送信的延迟可以忽略，换来的是只有一处真值。
 2. **流式文本先合并再发。** core 侧按 16~33ms 合并 token，`MessageStreamedText` 一次带一段。UI 不做节流。
@@ -73,4 +74,4 @@ pub enum CoreMessage {
 
 **并行任务不产生消息。** 六个任务在跑，是 agent 选择用一条消息说清楚。刷屏的责任在它的说话纪律，不在 UI 的聚合技巧——UI 也没有能力聚合，它没有 task 这个概念。
 
-想看完整轨迹有两个正当出口：让 agent 贴（`Code` block），或者跳去 dsh。
+想看完整轨迹有两个正当出口：让 agent 贴（markdown 围栏代码块），或者跳去 dsh。

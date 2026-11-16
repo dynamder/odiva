@@ -1,0 +1,54 @@
+# 004 Memory
+
+记忆是一个**给 agent 用的工具**，不是窗口的后台缓存。它会主动搜，窗口不会替它预取。
+这条决定了下面全部：没有 embedding、没有隐式注入、没有"相关记忆"面板。
+
+## 存什么
+
+```
+~/.odiva/memory/
+├── journal/2026-03-15.md    流水：当天发生了什么，只追加
+├── facts/                   蒸馏：稳定的、可被推翻的事实
+│   ├── project-odiva.md
+│   └── preference-editor.md
+├── tasks/<id>.md            每个任务一张卡：brief、回报、产物
+└── index/                   tantivy 索引，随时可以删了重建
+```
+
+- **只有 `journal/` 和 `facts/` 是不可重建的。** `index/` 随时删——这条让索引格式可以随便改。
+- `facts/` 每条带 front-matter：`id`、`tags`、`valid_from`、可选的 `superseded_by`。事实会过期（"用户在 A 公司"），过期不是删除，是接一条新的并指回旧的。
+- 一律 markdown。可读、可 diff、可手工改、可以进 git。
+
+## 谁写
+
+**daemon 是唯一写者。** agent 和 executor 只上报"事件"，落盘由 core 决定：什么时候进 journal、什么时候该蒸馏、哪条事实被取代。
+
+这条是为了避免 N 个并行任务同时写同样的文件，也为了让写入路径能被测试。写入是 append-only 的 journal，蒸馏是周期性（或按量触发）的单独步骤，两者分开——所以蒸馏失败不会丢流水。
+
+## 怎么读
+
+四个工具，接口先定死，后端可换：
+
+```rust
+memory.search(query, k, since, path_glob) -> [Hit]
+memory.read(path, lines?) -> String
+memory.list(prefix, depth)      -> [Entry]   // 标题 + 日期，不是正文
+memory.append(path, content)    -> ()
+```
+
+**不用 embedding。** 个人规模（几千篇）下，BM25 加好的 md 结构就够；真正的失败模式不是"语义没算出来"，是**agent 不知道该搜什么词**（用户说"上周那个 HDR 的事"，原话里是别的词）。两个廉价补丁，都比向量检索便宜：
+
+- `memory.list` 让它能**浏览**，而不是靠猜关键词；
+- 每次会话开始注入一份 ~2K token 的**近期索引**（最近 N 篇的标题 + 日期 + 路径）。这是 embedding 的替代品：给 agent 一张地图，而不是给它相似度。
+
+## tantivy 的具体坑
+
+1. **中文分词。** 默认 tokenizer 按空格切，中文整段会变成一个 term，BM25 直接失效。必须换 jieba / lindera 一类，并且要处理中英混排 + 代码标识符。
+2. **字段加权。** `title` / `tags` / `body` / `date` 分别建字段，标题命中要比正文命中重要。
+3. **先 rg 后 tantivy。** 索引同步（新增/修改/删除/移动/改名）是一个不大但很烦的常驻成本。个人规模用 `rg` + 简单排序就能验证接口好不好用；接口确认好用再换，上层不动。
+
+## 和 executor 的关系
+
+记忆检索作为 **MCP server 透传进每个 ACP session**，所以 executor 也能查。它不必知道记忆怎么组织——那是 core 的实现；它只需要知道"有一个 search 工具"。
+
+这样"互相通信"的两个方向就齐了：**ACP 向上（事件），MCP 向下（工具）**，不需要自己发明协议。
