@@ -12,7 +12,7 @@
 
 use odiva_proto::{Side, WireMessage};
 use yoagent::Agent;
-use yoagent::types::{AgentMessage, Content, Message};
+use yoagent::types::{AgentMessage, Content, Message, StopReason};
 
 use crate::error::Result;
 use crate::handoff::Handoff;
@@ -92,6 +92,30 @@ impl Talk {
 
     pub fn lane(&self) -> Lane {
         self.lane
+    }
+
+    /// What the provider said when the turn went wrong, if it did.
+    ///
+    /// A provider that fails mid-stream ends the turn normally, with an empty
+    /// assistant message and the reason in `error_message`. Without this, a
+    /// missing key looks exactly like a model with nothing to say.
+    pub fn failure(&self) -> Option<String> {
+        self.agent.messages().iter().rev().find_map(|message| {
+            let AgentMessage::Llm(Message::Assistant {
+                error_message,
+                stop_reason,
+                ..
+            }) = message
+            else {
+                return None;
+            };
+
+            match (error_message, stop_reason) {
+                (Some(error), _) => Some(error.clone()),
+                (None, StopReason::Error) => Some("模型返回了一个错误".to_owned()),
+                _ => None,
+            }
+        })
     }
 
     /// Whether she said anything during this activation.

@@ -160,11 +160,15 @@ impl App {
     pub fn apply(&mut self, message: CoreMessage) -> Command<Message> {
         match message {
             CoreMessage::CoreAttachedSession { snapshot } => {
+                let notice = self.notice.clone();
+
                 *self = Self::attached(snapshot)
                     .with_wire(self.wire.clone())
                     .with_theme(self.theme.clone())
                     .with_clock(self.now_ms())
                     .with_viewport(self.scroll.height());
+
+                self.notice = notice;
 
                 return self.follow();
             }
@@ -269,6 +273,14 @@ impl App {
 
     pub fn is_pinned(&self) -> bool {
         self.pinned
+    }
+
+    /// Starts with something already wrong — a missing key, say — so the window
+    /// says it before anyone types.
+    #[must_use]
+    pub fn with_notice(mut self, note: impl Into<String>) -> Self {
+        self.notice = Some(note.into());
+        self
     }
 
     /// The last thing that failed, until the next attempt replaces it.

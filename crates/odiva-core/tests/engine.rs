@@ -505,3 +505,28 @@ async fn a_turn_that_says_nothing_is_written_down() {
         "and the words the model did produce are kept: {log}"
     );
 }
+
+#[tokio::test]
+async fn a_provider_failure_is_not_a_quiet_turn() {
+    let store = scratch("engine-provider-failure");
+    let (handle, mut inbox) = scripted(vec![vec![MockResponse::Text(String::new())]], &store);
+
+    handle.send(UiMessage::UserSubmittedText {
+        text: "在吗".to_owned(),
+    });
+
+    let messages = drain(&mut inbox, 5).await;
+
+    let note = messages
+        .iter()
+        .find_map(|message| match message {
+            CoreMessage::CoreFailed { note } => Some(note.clone()),
+            _ => None,
+        })
+        .expect("a failed provider must say so");
+
+    assert!(
+        note.contains("模型没有回话"),
+        "an empty turn is never a quiet turn: {note}"
+    );
+}

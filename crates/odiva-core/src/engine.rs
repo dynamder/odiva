@@ -268,11 +268,23 @@ impl Engine {
         let spoke = talk.spoke();
         talk.flush()?;
 
-        if !spoke {
-            self.journal.line(format!(
-                "她没说话；模型的原话：{}",
-                talk.monologue().unwrap_or_else(|| "（空）".to_owned())
-            ));
+        if let Some(reason) = talk.failure() {
+            return Err(crate::Error::Brain(reason));
+        }
+
+        let monologue = talk.monologue();
+
+        match (&monologue, spoke) {
+            (Some(words), false) => {
+                self.journal.line(format!("她没说话；模型的原话：{words}"));
+            }
+            (None, false) => {
+                self.journal.line("她没说话；模型也没有回话");
+                return Err(crate::Error::Brain(
+                    "模型没有回话（没有 key，或者 provider 报错）".to_owned(),
+                ));
+            }
+            _ => {}
         }
 
         if talk.used() * 100 >= CONTEXT_WINDOW * COMPACT_AT {

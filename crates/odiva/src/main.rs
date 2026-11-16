@@ -36,7 +36,14 @@ fn main() -> iced::Result {
 
     runtime.spawn(engine.run());
 
-    let booting = Mutex::new(Some(App::empty().connected(handle, messages)));
+    let mut app = App::empty().connected(handle, messages);
+
+    if std::env::var_os("DEEPSEEK_API_KEY").is_none() {
+        app = app.with_notice("没有 DEEPSEEK_API_KEY：模型不会回话。设好再启动，原因记在日志里。");
+        eprintln!("odiva: 没有 DEEPSEEK_API_KEY，模型不会回话");
+    }
+
+    let booting = Mutex::new(Some(app));
 
     iced::application(
         move || {

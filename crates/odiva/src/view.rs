@@ -12,7 +12,7 @@
 //! * one column owns the window. The contact line, every bubble and the composer
 //!   are centred on the same measure.
 //!
-//! Consecutive messages from one side are a group: 3px inside a group, 16px
+//! Consecutive messages from one side are a group: 6px inside a group, 16px
 //! between sides, and only the group's outer corner is sharp.
 
 use iced::font::Weight;
