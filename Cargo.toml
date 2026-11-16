@@ -41,6 +41,7 @@ tokio-util = { version = "0.7.20", features = ["compat"] }
 # spawn the child ourselves to choose its working directory.
 agent-client-protocol = { version = "5.3", features = ["stdio"] }
 iced_test = "0.14"
+log = { version = "0.4", features = ["std"] }
 png = "0.18"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

@@ -61,6 +61,24 @@ pub enum Message {
     MessageMeasured { slot: usize, size: Size },
 }
 
+impl Message {
+    /// A name for the trace, without the payload.
+    fn label(&self) -> &'static str {
+        match self {
+            Self::UserChangedDraft(_) => "draft",
+            Self::UserSubmittedDraft => "submit",
+            Self::UserRequestedStop => "stop",
+            Self::UserTappedReply(_) => "tapped",
+            Self::UserJumpedToNewest => "jumped",
+            Self::UserOpenedLink(_) => "link",
+            Self::CoreReported(_) => "core",
+            Self::TranscriptScrolled(_) => "scrolled",
+            Self::TranscriptResized(_) => "resized",
+            Self::MessageMeasured { .. } => "measured",
+        }
+    }
+}
+
 pub struct App {
     messages: Vec<model::Msg>,
     slots: Measured,
@@ -191,7 +209,30 @@ impl App {
         }
     }
 
+    /// Takes one message and answers with the work it caused.
+    ///
+    /// Every message is also a line of the trace (`ODIVA_LOG=debug`): the four
+    /// numbers that decide what the transcript shows, so a list that moves when
+    /// nobody touched it says which of them moved.
     pub fn update(&mut self, message: Message) -> Command<Message> {
+        let label = message.label();
+        let command = self.handle(message);
+
+        log::debug!(
+            "{label}: y {:.1} height {:.1} content {:.1} total {:.1} pinned {} rows {}..{}",
+            self.scroll.y(),
+            self.scroll.height(),
+            self.scroll.content(),
+            self.total(),
+            self.pinned,
+            self.slice().range().start,
+            self.slice().range().end
+        );
+
+        command
+    }
+
+    fn handle(&mut self, message: Message) -> Command<Message> {
         match message {
             Message::UserChangedDraft(text) => self.draft = text,
             Message::UserSubmittedDraft => {

@@ -49,6 +49,16 @@ what was asked, whether she spoke, what the model said when she did not, and how
 tasks ended. A window started from a shortcut has no terminal, and silence on
 screen means two different things until someone writes it down.
 
+The same file carries whatever iced has to say about the window itself — the one
+worth knowing is "More than 3 consecutive RedrawRequested events produced layout
+invalidation", which means a frame never settled. `ODIVA_LOG=debug` adds a line
+per message with the four numbers that decide what the transcript shows, so a
+list that moves on its own says which number moved:
+
+```sh
+ODIVA_LOG=debug cargo run -p odiva
+```
+
 ## State
 
 The window is connected to the core. `main` builds the engine and spawns it;

@@ -14,6 +14,7 @@ iced.workspace = true
 chrono.workspace = true
 tokio.workspace = true
 yoagent.workspace = true
+log.workspace = true
 
 [dev-dependencies]
 iced_test.workspace = true

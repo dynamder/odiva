@@ -3027,6 +3027,7 @@ dependencies = [
  "ericed",
  "iced",
  "iced_test",
+ "log",
  "odiva-core",
  "odiva-proto",
  "png",
