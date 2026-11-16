@@ -7,6 +7,7 @@
 use std::sync::{Arc, Mutex};
 
 use iced::Size;
+use ericed::list::Scroll;
 use odiva::{App, Message, model, time};
 use odiva_proto::{
     CoreHandle, CoreMessage, FileRef, MessageId, Presence, Side, Snapshot, UiMessage, WireMessage,
@@ -229,6 +230,41 @@ fn jumping_to_the_newest_follows_again() {
 
     let _ = app.update(Message::UserJumpedToNewest);
     assert!(app.is_pinned());
+}
+
+#[test]
+fn the_bottom_is_where_the_viewport_says_not_where_the_table_guesses() {
+    let messages = (0..20u64)
+        .map(|slot| {
+            said(
+                slot + 1,
+                Side::User,
+                "一条消息，长度大约一行半，够让估算值和实测值不一样。",
+            )
+        })
+        .collect();
+
+    let mut app = window_with(messages);
+    let laid_out = app.total() - 100.0;
+
+    let _ = app.update(Message::TranscriptScrolled(Scroll::at(
+        laid_out - VIEWPORT,
+        VIEWPORT,
+        laid_out,
+    )));
+
+    assert!(
+        app.is_pinned(),
+        "the scrollbar is at the bottom even though the table claims another 100px"
+    );
+
+    let _ = app.update(Message::TranscriptScrolled(Scroll::at(
+        laid_out - VIEWPORT - 100.0,
+        VIEWPORT,
+        laid_out,
+    )));
+
+    assert!(!app.is_pinned(), "a hundred pixels up is not the bottom");
 }
 
 #[test]

@@ -22,6 +22,7 @@ use iced::widget::{
 };
 use iced::{Alignment, Background, Border, Color, Element, Font, Length, Padding, Theme};
 
+use ericed::list::Scroll;
 use ericed::style::{StyleExt, Tokens};
 use odiva_proto::{FileRef, Presence, Side};
 
@@ -112,7 +113,7 @@ fn transcript(app: &App) -> Element<'_, Message> {
 
     let reading = scrollable(in_column(column_of_messages.into()))
         .id(SHEET)
-        .on_scroll(Message::TranscriptScrolled)
+        .on_scroll(|viewport| Message::TranscriptScrolled(Scroll::of(&viewport)))
         .height(Length::Fill)
         .width(Length::Fill);
 

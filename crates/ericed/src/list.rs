@@ -4,34 +4,47 @@
 //! turns it into *which slots to build*; this module is that gap.
 //!
 //! ```text
-//! scrollable.content_bounds().height() == slots.total()
+//! slots.total()  -- the table: what the list believes, row by row
+//! content_bounds().height()  -- what iced laid out, and what offsets clamp to
 //! ```
 //!
-//! If the two disagree, every absolute offset is clamped against the wrong
-//! number and the list drifts one row per notch. The invariant is a property of
-//! the types: a [`Slice`] can only come from a [`Slots`], and its padding can
-//! only be produced by [`Slice::surround`], so both spacers come from the same
+//! Those two are not the same number, and only the second one may be believed:
+//! the table is measured only where a row has been built and estimated
+//! everywhere else, so it decides *what to build* and never *where the viewport
+//! is*. Sitting at the bottom is [`bottom`]: relative, so iced resolves it
+//! against the content it just laid out, and it stays true while that content
+//! grows.
+//!
+//! A [`Slice`] can only come from a [`Slots`], and its padding can only be
+//! produced by [`Slice::surround`], so both spacers come from the same
 //! arithmetic as the range they surround.
 //!
-//! The application has to keep the offset itself ([`Scroll`]): `scrollable`
-//! reports it only through `on_scroll`, and `scroll_to` does not fire
-//! `on_scroll`, which is why [`Scroll::to`] records the offset and returns the
-//! payload together.
+//! The application keeps the offset it was told ([`Scroll`]), because
+//! `scrollable` reports it only through `on_scroll` and a programmatic scroll
+//! is not reported until the next frame resolves it. Storing a target nobody has
+//! drawn yet would make a second copy of the truth, and the two would argue.
 
 use std::ops::Range;
 
 use iced_core::{Element, Pixels, Size};
 use iced_widget::Column;
-use iced_widget::scrollable::{AbsoluteOffset, Viewport};
+use iced_widget::scrollable::{RelativeOffset, Viewport};
 use iced_widget::space;
 
-/// The stored counterpart of a [`Viewport`]: the same two numbers, kept as state
+/// The stored counterpart of a [`Viewport`]: the same numbers, kept as state
 /// because `view` needs them now and the message arrives later.
+///
+/// Every field is an observation. Nothing here is a target: a target is what
+/// [`bottom`] asks iced for, and iced reports back what it did.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct Scroll {
     y: f32,
     height: f32,
+    content: f32,
 }
+
+/// How close to the end still counts as the end. Layout rounds to whole pixels.
+const END_SLACK: f32 = 2.0;
 
 impl Scroll {
     /// A scroll that has not been told anything yet: top, no height.
@@ -39,12 +52,13 @@ impl Scroll {
         Self {
             y: 0.0,
             height: 0.0,
+            content: 0.0,
         }
     }
 
     /// A scroll at a known position, for tests and for restoring state.
-    pub const fn at(y: f32, height: f32) -> Self {
-        Self { y, height }
+    pub const fn at(y: f32, height: f32, content: f32) -> Self {
+        Self { y, height, content }
     }
 
     /// Where the viewport sits, in pixels from the content's top.
@@ -57,10 +71,18 @@ impl Scroll {
         self.height
     }
 
-    /// The payload of `on_scroll`.
-    pub fn update(&mut self, viewport: &Viewport) {
-        self.y = viewport.absolute_offset().y;
-        self.height = viewport.bounds().height;
+    /// How tall all the content is, in pixels — iced's number, not the table's.
+    pub fn content(&self) -> f32 {
+        self.content
+    }
+
+    /// What the viewport said, as the payload of `on_scroll`.
+    pub fn of(viewport: &Viewport) -> Self {
+        Self {
+            y: viewport.absolute_offset().y,
+            height: viewport.bounds().height,
+            content: viewport.content_bounds().height,
+        }
     }
 
     /// The height of the viewport, without touching the offset.
@@ -71,19 +93,27 @@ impl Scroll {
         self.height = height.max(0.0);
     }
 
-    /// Records a programmatic scroll and returns the payload to hand to
-    /// `iced::widget::operation::scroll_to`.
+    /// Whether the viewport shows the very end of the content.
     ///
-    /// Call it in the same `update` that starts the task: `scroll_to` does not
-    /// run `on_scroll`, so doing the two separately leaves the list drawing one
-    /// window while the scrollbar shows another.
-    pub fn to(&mut self, y: f32) -> AbsoluteOffset<Option<f32>> {
-        self.y = y.max(0.0);
+    /// Judged against what iced laid out rather than against [`Slots::total`]:
+    /// the table is an estimate for every row that was never built, so a
+    /// transcript that trusted its own total would sit a few pixels above the
+    /// bottom for ever — and call itself unpinned while it did.
+    pub fn at_end(&self) -> bool {
+        self.content <= self.height || self.y + self.height >= self.content - END_SLACK
+    }
+}
 
-        AbsoluteOffset {
-            x: None,
-            y: Some(self.y),
-        }
+/// A request to sit at the end of a list, for `iced::widget::operation::snap_to`.
+///
+/// Relative on purpose: iced resolves it against the content it actually laid
+/// out, so the request cannot disagree with the real bottom the way an absolute
+/// offset computed from the height table can — and it stays true while that
+/// content grows.
+pub fn bottom() -> RelativeOffset<Option<f32>> {
+    RelativeOffset {
+        x: None,
+        y: Some(1.0),
     }
 }
 
@@ -237,12 +267,15 @@ pub trait Slots {
     }
 }
 
-fn clamp_offset(y: f32, height: f32, max_scroll: f32) -> f32 {
-    if height <= 0.0 {
-        y.max(0.0)
-    } else {
-        y.clamp(0.0, max_scroll)
-    }
+/// An offset the viewport reported, with nothing clamped off the top.
+///
+/// Deliberately not clamped to [`Slots::total`]: the reported offset is where
+/// the viewport really is, and the table can be short by however much its
+/// estimates are — clamping would slice the window at a place the reader is not
+/// looking at. Past the end is not a problem either: [`Slots`] clamps the slot
+/// index itself.
+fn reported(y: f32) -> f32 {
+    y.max(0.0)
 }
 
 fn empty_slice(total: f32) -> Slice {
@@ -324,7 +357,7 @@ impl Slots for Fixed {
             return empty_slice(total);
         }
 
-        let y = clamp_offset(y, height, self.max_scroll(height));
+        let y = reported(y);
         let first = ((y / self.row).floor() as usize).min(self.len - 1);
 
         let start = first.saturating_sub(self.overscan);
@@ -520,7 +553,7 @@ impl Slots for Measured {
             return empty_slice(total);
         }
 
-        let y = clamp_offset(y, height, self.max_scroll(height));
+        let y = reported(y);
         let first = self.slot_at(y);
         let last = self.slot_at(y + height.max(0.0));
 
@@ -544,21 +577,48 @@ mod tests {
     const ROW: f32 = 24.0;
 
     #[test]
-    fn scroll_records_what_the_writer_and_the_view_agree_on() {
+    fn scroll_keeps_the_viewport_and_the_content_it_was_told() {
         let mut scroll = Scroll::new();
         assert_eq!(scroll.y(), 0.0);
         assert_eq!(scroll.height(), 0.0);
+        assert_eq!(scroll.content(), 0.0);
 
-        let payload = scroll.to(120.0);
+        scroll.resized(480.0);
 
-        assert_eq!(scroll.y(), 120.0);
-        assert_eq!(payload.y, Some(120.0));
-        assert_eq!(payload.x, None);
+        assert_eq!(scroll.height(), 480.0, "a sensor knows the height first");
+        assert_eq!(scroll.content(), 0.0, "and nothing else");
+    }
+
+    #[test]
+    fn at_the_end_is_judged_against_the_content_not_the_table() {
+        let mut scroll = Scroll::at(520.0, 480.0, 1000.0);
+
+        assert!(scroll.at_end(), "520 + 480 == 1000");
+
+        scroll = Scroll::at(400.0, 480.0, 1000.0);
+
+        assert!(!scroll.at_end(), "a hundred pixels short is not the end");
+        assert!(
+            Scroll::at(0.0, 480.0, 300.0).at_end(),
+            "a conversation that fits is always at its end"
+        );
+        assert!(
+            Scroll::at(0.0, 0.0, 0.0).at_end(),
+            "and so is one that knows nothing yet"
+        );
+    }
+
+    #[test]
+    fn a_request_for_the_end_leaves_the_horizontal_axis_alone() {
+        let told = bottom();
+
+        assert_eq!(told.y, Some(1.0));
+        assert_eq!(told.x, None);
     }
 
     #[test]
     fn resizing_keeps_the_offset_and_on_scroll_keeps_both() {
-        let mut scroll = Scroll::at(240.0, 480.0);
+        let mut scroll = Scroll::at(240.0, 480.0, 2400.0);
 
         scroll.resized(600.0);
 
@@ -612,6 +672,22 @@ mod tests {
     }
 
     #[test]
+    fn a_reported_offset_past_the_tables_end_still_finds_the_last_slots() {
+        let path = measured(40.0, 10);
+        let scroll = Scroll::at(380.0, 200.0, 600.0);
+
+        let slice = path.slice(&scroll);
+
+        assert_eq!(
+            slice.range().start,
+            9,
+            "the window starts where the viewport says, not where the table ends"
+        );
+        assert_eq!(slice.range().end, 10);
+        assert_eq!(slice.after(), 0.0);
+    }
+
+    #[test]
     fn an_empty_list_still_reports_its_total() {
         let path = fixed(ROW, 0);
         let slice = path.slice_at(0.0, 480.0);
@@ -625,7 +701,7 @@ mod tests {
     #[test]
     fn reveal_moves_the_minimum() {
         let path = fixed(ROW, 100);
-        let scroll = Scroll::at(240.0, 480.0);
+        let scroll = Scroll::at(240.0, 480.0, 2400.0);
 
         assert_eq!(path.reveal(15, &scroll), 240.0);
         assert_eq!(path.reveal(3, &scroll), 72.0);
@@ -635,7 +711,7 @@ mod tests {
     #[test]
     fn reveal_refuses_to_guess_without_a_height() {
         let path = fixed(ROW, 100);
-        let scroll = Scroll::at(240.0, 0.0);
+        let scroll = Scroll::at(240.0, 0.0, 2400.0);
 
         assert_eq!(path.reveal(90, &scroll), 240.0);
     }
@@ -643,7 +719,7 @@ mod tests {
     #[test]
     fn anchor_puts_a_slot_at_a_known_depth() {
         let path = fixed(ROW, 100);
-        let scroll = Scroll::at(240.0, 480.0);
+        let scroll = Scroll::at(240.0, 480.0, 2400.0);
 
         assert_eq!(path.anchor(20, 10.0, &scroll), 470.0);
         assert_eq!(path.anchor(0, 10.0, &scroll), 0.0);
@@ -707,7 +783,7 @@ mod tests {
         let mut path = measured(40.0, 20).overscan(1);
         path.measure(5, Size::new(600.0, 80.0));
 
-        let scroll = Scroll::at(path.top(5), 200.0);
+        let scroll = Scroll::at(path.top(5), 200.0, path.total());
         let slice = path.slice(&scroll);
 
         assert_eq!(slice.total(), path.total());

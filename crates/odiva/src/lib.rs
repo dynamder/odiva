@@ -17,8 +17,8 @@ pub mod view;
 mod wire;
 
 use chrono::Local;
-use ericed::list::{Measured, Scroll, Slice, Slots, measured};
-use iced::widget::{operation, scrollable};
+use ericed::list::{Measured, Scroll, Slice, Slots, bottom, measured};
+use iced::widget::operation;
 use iced::{Element, Size, Subscription, Task as Command, Theme};
 use tokio::sync::mpsc::UnboundedReceiver;
 
@@ -50,7 +50,9 @@ pub enum Message {
     UserOpenedLink(String),
     /// The core said something. The only way the transcript can change.
     CoreReported(CoreMessage),
-    TranscriptScrolled(scrollable::Viewport),
+    /// Where the transcript really is: what the viewport reported, not what the
+    /// height table predicts.
+    TranscriptScrolled(Scroll),
     /// The transcript's viewport got a size. Without the first one the window
     /// cannot tell "short conversation, sit at the bottom" from "long
     /// conversation, stay at the top".
@@ -141,7 +143,7 @@ impl App {
     /// decision it feeds — a short conversation sits at the bottom, a long one
     /// stays at the top — has to be right on the first paint.
     pub fn with_viewport(mut self, height: f32) -> Self {
-        self.scroll = Scroll::at(0.0, height.max(0.0));
+        self.scroll = Scroll::at(0.0, height.max(0.0), 0.0);
         self
     }
 
@@ -225,9 +227,9 @@ impl App {
                     return self.follow();
                 }
             }
-            Message::TranscriptScrolled(viewport) => {
-                self.scroll.update(&viewport);
-                self.pinned = self.scroll.y() + self.scroll.height() >= self.total() - 2.0;
+            Message::TranscriptScrolled(told) => {
+                self.scroll = told;
+                self.pinned = told.at_end();
             }
             Message::MessageMeasured { slot, size } => {
                 if self.slots.measure(slot, size) && self.pinned {
@@ -249,9 +251,9 @@ impl App {
     }
 
     /// The slots this frame should build, and the padding that keeps the content
-    /// height equal to the sum of the rows.
+    /// height in step with the rows.
     pub fn slice(&self) -> Slice {
-        self.slots.slice(&self.scroll)
+        self.slots.slice_at(self.window_top(), self.scroll.height())
     }
 
     /// How tall the whole transcript is: measured rows plus estimates.
@@ -308,31 +310,47 @@ impl App {
         self.theme.clone()
     }
 
-    /// Scrolls to the bottom, saying so, so [`Scroll`]'s copy stays honest.
+    /// Scrolls to the bottom by asking iced for the end, rather than by
+    /// computing where the end is.
     ///
-    /// `Scrollable::anchor_bottom()` is unrelated: it moves the thumb when
-    /// there is nothing to scroll, and never moves the content.
+    /// The table's total is not the content's height: rows that were never built
+    /// are estimates. An absolute target derived from it lands a few pixels off,
+    /// iced clamps it somewhere else, the window reports that place back, and the
+    /// two numbers take turns — which is a list that shivers at the bottom.
+    /// `snap_to` is resolved by iced against what it laid out, so there is only
+    /// one number, and it stays the end while the content grows.
+    ///
+    /// `Scrollable::anchor_bottom()` is unrelated: it moves the thumb when there
+    /// is nothing to scroll, and never moves the content.
     fn follow(&mut self) -> Command<Message> {
         if self.scroll.height() <= 0.0 {
             return Command::none();
         }
 
-        let target = (self.total() - self.scroll.height()).max(0.0);
-
-        operation::scroll_to(SHEET, self.scroll.to(target))
+        operation::snap_to(SHEET, bottom())
     }
 
-    /// Puts this row's best known height into the slot table.
+    /// Where this frame's window starts, in the table's own coordinates.
     ///
-    /// Called whenever a row's *content* changes: the row's sensor overwrites it
-    /// with the truth a frame later, and until then the estimate keeps the total —
-    /// and therefore the scroll position and the bottom padding — from being
-    /// nonsense.
+    /// While following, the window is the end of the table rather than the last
+    /// place the viewport was seen at. A message that was just appended lives
+    /// there, so it is built, measured and drawn in the same frame; the offset
+    /// iced resolves for it only arrives a frame later, and a frame of blank
+    /// where a new message should be is a flash.
+    fn window_top(&self) -> f32 {
+        if self.pinned {
+            (self.total() - self.scroll.height()).max(0.0)
+        } else {
+            self.scroll.y()
+        }
+    }
+
     /// The space the view puts above the row at `slot`.
     ///
-    /// The estimate has to include it, or every row is short by the gap and the
-    /// list ends before its content does — which is exactly what "scrolled to the
-    /// bottom and the last message is cut" looks like.
+    /// One rule, read by both the view and the estimate. The estimate has to
+    /// include it, or every row is short by the gap and the list ends before its
+    /// content does — which is exactly what "scrolled to the bottom and the last
+    /// message is cut" looks like.
     pub fn gap_at(&self, slot: usize) -> f32 {
         let same_side = slot > 0
             && self.messages.get(slot).is_some_and(|message| {
@@ -348,6 +366,11 @@ impl App {
         }
     }
 
+    /// Puts this row's best known height into the slot table.
+    ///
+    /// Called whenever a row's *content* changes: the row's sensor overwrites it
+    /// with the truth a frame later, and until then the estimate keeps the total —
+    /// and therefore the padding and the scrollbar — from being nonsense.
     fn estimate(&mut self, slot: usize) {
         let Some(msg) = self.messages.get(slot) else {
             return;
