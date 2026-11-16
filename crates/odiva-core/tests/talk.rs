@@ -161,7 +161,19 @@ async fn a_new_prompt_opens_the_next_generation() {
     talk.turn(&ids.theirs("第二句")).await.expect("a turn");
 
     assert!(store.path(Lane::Talk { generation: 0 }).exists());
-    assert!(store.path(Lane::Talk { generation: 1 }).exists());
+
+    let carried = store
+        .read(Lane::Talk { generation: 1 })
+        .expect("the next generation")
+        .expect("a written generation");
+
+    assert!(
+        carried
+            .messages()
+            .iter()
+            .any(|message| message.markdown == "第一句"),
+        "a new prompt is a new prefix, not a new conversation"
+    );
 }
 
 #[tokio::test]

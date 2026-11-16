@@ -321,18 +321,19 @@ impl crate::acp::Permission for AskPermission {
 /// worker's turn ends with something the core can act on.
 pub fn brief_prompt(brief: &str) -> String {
     format!(
-        "你在一份独立的工作目录里干活，干完这一轮就结束。\n\
+        "You work in a directory of your own, and this turn is all the time you get.\n\
+         Someone reads what you write; the last block is parsed.\n\
          \n\
-         最后一段必须是报告，长这样：\n\
+         End with a report:\n\
          \n\
          ```report\n\
          {{\"status\": \"done\" | \"need\" | \"blocked\", \"question\": \"…\", \"artifacts\": [\"…\"]}}\n\
          ```\n\
          \n\
-         done 是干完了，need 是要一句话才能继续（把问题写进 question），\
-         blocked 是卡住了。除这三行以外的话会被人读到，但不会被解析。\n\
+         done means finished; need means one sentence would unblock you (put it in question);\n\
+         blocked means you are stuck. Write plainly; nobody wants a status report.\n\
          \n\
-         # 这活是什么\n\
+         # The job\n\
          {brief}\n"
     )
 }
@@ -342,14 +343,14 @@ pub fn brief(goal: &str, files: &[String], constraints: &[String]) -> String {
     let mut brief = goal.trim().to_owned();
 
     if !files.is_empty() {
-        brief.push_str("\n\n# 相关的文件\n");
+        brief.push_str("\n\n# Files worth reading\n");
         for file in files {
             brief.push_str(&format!("- {file}\n"));
         }
     }
 
     if !constraints.is_empty() {
-        brief.push_str("\n# 约束\n");
+        brief.push_str("\n# Constraints\n");
         for constraint in constraints {
             brief.push_str(&format!("- {constraint}\n"));
         }
@@ -364,13 +365,13 @@ pub fn reading(task: &Task) -> String {
 
     if let Some(report) = &task.report {
         text.push_str(&format!(
-            "报告：{}\n",
+            "report: {}\n",
             serde_json::to_string(report).unwrap_or_default()
         ));
     }
 
     if !task.said.is_empty() {
-        text.push_str("\n## 它说的最后一段\n");
+        text.push_str("\n## Its last words\n");
         text.push_str(&task.said);
         text.push('\n');
     }

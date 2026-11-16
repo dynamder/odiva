@@ -265,6 +265,10 @@ impl Engine {
 
         drop(running);
 
+        if !talk.spoke() && talk.failure().is_none() {
+            talk.run(crate::prompt::AFTER_SILENCE).await?;
+        }
+
         let spoke = talk.spoke();
         talk.flush()?;
 

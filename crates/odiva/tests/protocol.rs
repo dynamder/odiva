@@ -286,3 +286,14 @@ fn a_re_attach_keeps_the_wire() {
 
     assert_eq!(app.subscription().units(), 1);
 }
+
+#[test]
+fn a_reopened_window_shows_everything_it_was_told() {
+    let app = window_with(vec![
+        said(1, Side::User, "一"),
+        said(2, Side::Assistant, "二"),
+        said(3, Side::User, "三"),
+    ]);
+
+    assert_eq!(app.slice().len(), 3, "the snapshot is not a preview");
+}

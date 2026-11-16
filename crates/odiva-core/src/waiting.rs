@@ -99,7 +99,7 @@ impl AgentTool for Yield {
     }
 
     fn label(&self) -> &str {
-        "让给他"
+        "Yield"
     }
 
     fn description(&self) -> &str {
@@ -130,11 +130,11 @@ impl AgentTool for CancelYield {
     }
 
     fn label(&self) -> &str {
-        "不换"
+        "Not yet"
     }
 
     fn description(&self) -> &str {
-        "拒绝转换：这一轮继续干，对方的话排在后面，不会丢。"
+        "Refuse the switch: this turn continues, and their words wait their turn."
     }
 
     fn parameters_schema(&self) -> Value {

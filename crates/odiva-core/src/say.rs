@@ -76,11 +76,11 @@ impl AgentTool for Say {
     }
 
     fn label(&self) -> &str {
-        "说出来"
+        "Say it"
     }
 
     fn description(&self) -> &str {
-        "把一条消息发到窗口上。不调用它，对方什么都不会看到。"
+        "Put one message on the window. Nothing you don't send through it is visible."
     }
 
     fn parameters_schema(&self) -> Value {
@@ -89,17 +89,17 @@ impl AgentTool for Say {
             "properties": {
                 "markdown": {
                     "type": "string",
-                    "description": "对方会看到的文字。markdown。"
+                    "description": "What the person will read. Markdown."
                 },
                 "attach": {
                     "type": "array",
                     "items": { "type": "string" },
-                    "description": "要附上的文件路径。大小由 core 量，不要自己写。"
+                    "description": "Paths to attach. The core measures them; do not write sizes."
                 },
                 "replies": {
                     "type": "array",
                     "items": { "type": "string" },
-                    "description": "建议对方点的回话。点了等于替他打这句话。"
+                    "description": "Suggested replies. Tapping one types it for the person."
                 }
             },
             "required": ["markdown"]

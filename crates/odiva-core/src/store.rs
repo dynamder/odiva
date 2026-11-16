@@ -278,13 +278,21 @@ impl Store {
         match self.read(lane)? {
             None => Ok((lane, Log::new(system))),
             Some(log) if log.system() == system => Ok((lane, log)),
-            Some(_) => match lane {
-                Lane::Talk { generation } => Ok((
-                    Lane::Talk {
-                        generation: generation + 1,
-                    },
-                    Log::new(system),
-                )),
+            Some(previous) => match lane {
+                Lane::Talk { generation } => {
+                    let mut log = Log::new(system);
+
+                    for message in previous.messages() {
+                        log.push(message.clone());
+                    }
+
+                    Ok((
+                        Lane::Talk {
+                            generation: generation + 1,
+                        },
+                        log,
+                    ))
+                }
                 fixed => Ok((fixed, Log::new(system))),
             },
         }

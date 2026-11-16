@@ -486,12 +486,15 @@ async fn a_task_that_dies_is_never_silent() {
 #[tokio::test]
 async fn a_turn_that_says_nothing_is_written_down() {
     let store = scratch("engine-journal");
-    let (handle, mut inbox) = scripted(vec![vec![done()]], &store);
+    let (handle, mut inbox) = scripted(
+        vec![vec![done(), MockResponse::Text("还是不说。".to_owned())]],
+        &store,
+    );
 
     handle.send(UiMessage::UserSubmittedText {
         text: "在吗".to_owned(),
     });
-    drain(&mut inbox, 3).await;
+    drain(&mut inbox, 4).await;
 
     let log = std::fs::read_to_string(store.root().join("odiva.log")).expect("a journal");
 
@@ -501,7 +504,7 @@ async fn a_turn_that_says_nothing_is_written_down() {
         "silence is a fact worth writing down: {log}"
     );
     assert!(
-        log.contains("好。"),
+        log.contains("还是不说。"),
         "and the words the model did produce are kept: {log}"
     );
 }
@@ -509,7 +512,51 @@ async fn a_turn_that_says_nothing_is_written_down() {
 #[tokio::test]
 async fn a_provider_failure_is_not_a_quiet_turn() {
     let store = scratch("engine-provider-failure");
-    let (handle, mut inbox) = scripted(vec![vec![MockResponse::Text(String::new())]], &store);
+    let (handle, mut inbox) = scripted(
+        vec![vec![
+            MockResponse::Text(String::new()),
+            MockResponse::Text(String::new()),
+        ]],
+        &store,
+    );
+
+    handle.send(UiMessage::UserSubmittedText {
+        text: "在吗".to_owned(),
+    });
+
+    let mut note = None;
+
+    for _ in 0..8 {
+        let message = tokio::time::timeout(Duration::from_secs(5), inbox.recv())
+            .await
+            .expect("the engine kept talking")
+            .expect("the engine is alive");
+
+        if let CoreMessage::CoreFailed { note: said } = message {
+            note = Some(said);
+            break;
+        }
+    }
+
+    let note = note.expect("a failed provider must say so");
+
+    assert!(
+        note.contains("模型没有回话"),
+        "an empty turn is never a quiet turn: {note}"
+    );
+}
+
+#[tokio::test]
+async fn a_turn_that_forgot_to_speak_gets_one_more_chance() {
+    let store = scratch("engine-after-silence");
+    let (handle, mut inbox) = scripted(
+        vec![vec![
+            MockResponse::Text("我在想，先不说话。".to_owned()),
+            saying("在。"),
+            done(),
+        ]],
+        &store,
+    );
 
     handle.send(UiMessage::UserSubmittedText {
         text: "在吗".to_owned(),
@@ -517,16 +564,36 @@ async fn a_provider_failure_is_not_a_quiet_turn() {
 
     let messages = drain(&mut inbox, 5).await;
 
-    let note = messages
-        .iter()
-        .find_map(|message| match message {
-            CoreMessage::CoreFailed { note } => Some(note.clone()),
-            _ => None,
-        })
-        .expect("a failed provider must say so");
+    assert_eq!(
+        bubbles(&messages),
+        vec![
+            (Side::User, "在吗".to_owned()),
+            (Side::Assistant, "在。".to_owned()),
+        ],
+        "the reminder turns a forgotten say into a message"
+    );
+}
 
-    assert!(
-        note.contains("模型没有回话"),
-        "an empty turn is never a quiet turn: {note}"
+#[tokio::test]
+async fn silence_after_the_reminder_is_a_choice() {
+    let store = scratch("engine-after-silence-refused");
+    let (handle, mut inbox) = scripted(
+        vec![vec![
+            MockResponse::Text("没什么可说的。".to_owned()),
+            MockResponse::Text("还是不说。".to_owned()),
+        ]],
+        &store,
+    );
+
+    handle.send(UiMessage::UserSubmittedText {
+        text: "随便说点".to_owned(),
+    });
+
+    let messages = drain(&mut inbox, 4).await;
+
+    assert_eq!(
+        bubbles(&messages),
+        vec![(Side::User, "随便说点".to_owned())],
+        "silence is still an answer"
     );
 }

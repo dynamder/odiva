@@ -50,7 +50,7 @@ impl AgentTool for RequestIdle {
     }
 
     fn label(&self) -> &str {
-        "先停一下"
+        "Park"
     }
 
     fn description(&self) -> &str {

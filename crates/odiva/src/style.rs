@@ -296,7 +296,7 @@ pub fn side_gap() -> f32 {
 
 /// The gap inside a run of messages from one side.
 pub fn same_side_gap() -> f32 {
-    6.0
+    10.0
 }
 
 /// The gap between a message's body and whatever hangs under it (files, replies).

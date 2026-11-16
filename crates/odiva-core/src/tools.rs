@@ -51,11 +51,12 @@ impl AgentTool for Dispatch {
     }
 
     fn label(&self) -> &str {
-        "派活"
+        "Dispatch"
     }
 
     fn description(&self) -> &str {
-        "把活交给一个独立的 worker 进程，立刻返回。它有自己的目录，会失败，也会干完回来找你。"
+        "Send a job to a separate worker process and return at once. It has its own directory, \
+         it can fail, and it comes back when it is done."
     }
 
     fn parameters_schema(&self) -> Value {
@@ -90,11 +91,11 @@ impl AgentTool for List {
     }
 
     fn label(&self) -> &str {
-        "看看在跑什么"
+        "What is running"
     }
 
     fn description(&self) -> &str {
-        "所有任务，一行一个：id、在等什么、一句话。"
+        "Every task, one per line: id, what it waits on, one sentence."
     }
 
     fn parameters_schema(&self) -> Value {
@@ -135,11 +136,11 @@ impl AgentTool for Read {
     }
 
     fn label(&self) -> &str {
-        "读任务"
+        "Read a task"
     }
 
     fn description(&self) -> &str {
-        "一个任务的全貌：在等什么、报告、它最后说的话。"
+        "One task in full: what it waits on, its report, the last thing it said."
     }
 
     fn parameters_schema(&self) -> Value {
@@ -182,11 +183,12 @@ impl AgentTool for Answer {
     }
 
     fn label(&self) -> &str {
-        "回它一句"
+        "Answer a task"
     }
 
     fn description(&self) -> &str {
-        "给一个在等你说话的任务回一句。它会带着原来的 brief、它上次说的话和你这句，重开一轮。"
+        "Answer a task that is waiting for words. It restarts with its brief, its last words \
+         and this line."
     }
 
     fn parameters_schema(&self) -> Value {
@@ -194,7 +196,7 @@ impl AgentTool for Answer {
             "type": "object",
             "properties": {
                 "id": { "type": "string" },
-                "text": { "type": "string", "description": "要交代给它的那句话。" }
+                "text": { "type": "string", "description": "What to tell it." }
             },
             "required": ["id", "text"]
         })
@@ -226,11 +228,11 @@ impl AgentTool for Cancel {
     }
 
     fn label(&self) -> &str {
-        "停掉"
+        "Cancel"
     }
 
     fn description(&self) -> &str {
-        "停掉一个任务，进程就地结束；已经做出去的副作用不会撤回。"
+        "Stop a task; its process ends where it stands. Side effects already made are not undone."
     }
 
     fn parameters_schema(&self) -> Value {
@@ -274,11 +276,12 @@ impl AgentTool for Permit {
     }
 
     fn label(&self) -> &str {
-        "批或不批"
+        "Permit"
     }
 
     fn description(&self) -> &str {
-        "回答一个停在权限请求上的任务：能不能动工作区外面这一次。"
+        "Answer a task stopped on a permission request: may it touch something outside its \
+         workspace, this once?"
     }
 
     fn parameters_schema(&self) -> Value {
@@ -286,7 +289,7 @@ impl AgentTool for Permit {
             "type": "object",
             "properties": {
                 "id": { "type": "string" },
-                "allow": { "type": "boolean", "description": "真就是允许这一次，假就是不要。" }
+                "allow": { "type": "boolean", "description": "True allows it this once; false refuses." }
             },
             "required": ["id", "allow"]
         })
