@@ -20,7 +20,7 @@
 
 use std::ops::Range;
 
-use iced_core::{Element, Length, Pixels, Size};
+use iced_core::{Element, Pixels, Size};
 use iced_widget::Column;
 use iced_widget::scrollable::{AbsoluteOffset, Viewport};
 use iced_widget::space;
@@ -134,14 +134,11 @@ impl Slice {
     /// The spacing is zero on purpose: a `Column` adds its spacing between every
     /// pair, which would grow the content by `2 * spacing` on every rebuild.
     ///
-    /// The height is pinned to the slice's total, and that is what keeps the
-    /// invariant true while heights are still being discovered. Without it the
-    /// content's real height is "padding plus whatever the built rows laid out
-    /// to", which equals the table's total only once every one of them has been
-    /// measured. A gap of a few pixels is enough for the scrollable to clamp an
-    /// offset against one number while the list was built from the other: a row
-    /// enters, the content shrinks, the clamp moves the view, another row
-    /// enters — and at the bottom edge of a row that is exactly the flicker.
+    /// The height is deliberately *not* pinned to [`Slice::total`]. It is the
+    /// tempting fix for a list whose arithmetic and whose pixels disagree, but it
+    /// makes the table authoritative: a row whose estimate is too small is laid
+    /// out below the content box, never enters the window, and therefore never
+    /// measures itself. The list then ends early and the bottom is unreachable.
     pub fn surround<'a, Message, Theme, Renderer>(
         &self,
         content: impl Into<Element<'a, Message, Theme, Renderer>>,
@@ -157,7 +154,6 @@ impl Slice {
             space().height(self.after).into(),
         ]))
         .spacing(0.0)
-        .height(Length::Fixed(self.total))
         .into()
     }
 }

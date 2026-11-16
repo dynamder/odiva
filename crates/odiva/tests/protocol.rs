@@ -297,3 +297,21 @@ fn a_reopened_window_shows_everything_it_was_told() {
 
     assert_eq!(app.slice().len(), 3, "the snapshot is not a preview");
 }
+
+#[test]
+fn a_row_estimate_includes_the_space_above_it() {
+    let one = window_with(vec![said(1, Side::User, "一")]);
+    let two = window_with(vec![said(1, Side::User, "一"), said(2, Side::User, "一")]);
+
+    assert_eq!(one.gap_at(0), odiva::style::side_gap());
+    assert_eq!(two.gap_at(1), odiva::style::same_side_gap());
+
+    let row = two.messages()[1].estimated_height();
+    let added = two.total() - one.total();
+
+    assert!(
+        (added - (row + odiva::style::same_side_gap())).abs() < 0.01,
+        "a row costs its height plus the gap above it: {added} vs {}",
+        row + odiva::style::same_side_gap()
+    );
+}

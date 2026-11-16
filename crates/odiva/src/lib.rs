@@ -24,7 +24,7 @@ use tokio::sync::mpsc::UnboundedReceiver;
 
 use odiva_proto::{CoreHandle, CoreMessage, Presence, Snapshot, UiMessage};
 
-use crate::style::column_width;
+use crate::style::{column_width, same_side_gap, side_gap};
 use crate::wire::Wire;
 
 /// The transcript's scrollable, so a task can address it.
@@ -328,6 +328,26 @@ impl App {
     /// with the truth a frame later, and until then the estimate keeps the total —
     /// and therefore the scroll position and the bottom padding — from being
     /// nonsense.
+    /// The space the view puts above the row at `slot`.
+    ///
+    /// The estimate has to include it, or every row is short by the gap and the
+    /// list ends before its content does — which is exactly what "scrolled to the
+    /// bottom and the last message is cut" looks like.
+    pub fn gap_at(&self, slot: usize) -> f32 {
+        let same_side = slot > 0
+            && self.messages.get(slot).is_some_and(|message| {
+                self.messages
+                    .get(slot - 1)
+                    .is_some_and(|before| before.from == message.from)
+            });
+
+        if same_side {
+            same_side_gap()
+        } else {
+            side_gap()
+        }
+    }
+
     fn estimate(&mut self, slot: usize) {
         let Some(msg) = self.messages.get(slot) else {
             return;
@@ -344,7 +364,7 @@ impl App {
             0.0
         };
 
-        let height = msg.estimated_height() + divider;
+        let height = msg.estimated_height() + divider + self.gap_at(slot);
 
         self.slots.measure(slot, Size::new(column_width(), height));
     }

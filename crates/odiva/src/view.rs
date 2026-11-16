@@ -27,8 +27,7 @@ use odiva_proto::{FileRef, Presence, Side};
 
 use crate::model::Msg;
 use crate::style::{
-    block_gap, bubble_width, column_width, same_side_gap, side_gap, wide_bubble_width, Act, Line,
-    Shape, Surface, Type,
+    block_gap, bubble_width, column_width, wide_bubble_width, Act, Line, Shape, Surface, Type,
 };
 use crate::{App, Message, SHEET, time};
 
@@ -100,11 +99,7 @@ fn transcript(app: &App) -> Element<'_, Message> {
         let previous = slot.checked_sub(1).map(|before| messages[before].sent);
         let divider = time::needs_divider(previous, msg.sent).then(|| time::label(msg.sent, now));
 
-        let gap = if same_before {
-            same_side_gap()
-        } else {
-            side_gap()
-        };
+        let gap = app.gap_at(slot);
 
         let view = item_view(msg, shape, divider.as_deref(), gap, app.theme());
 
