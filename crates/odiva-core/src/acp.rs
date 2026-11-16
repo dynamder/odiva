@@ -10,14 +10,15 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::sync::Arc;
 
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::util::MatchDispatch;
 use agent_client_protocol::v1::SessionMessage;
 use agent_client_protocol::v1::schema::{
-    ContentBlock, ContentChunk, InitializeRequest, PermissionOptionKind, RequestPermissionOutcome,
-    RequestPermissionRequest, RequestPermissionResponse, SelectedPermissionOutcome,
-    SessionNotification, SessionUpdate, StopReason,
+    ContentBlock, ContentChunk, InitializeRequest, PermissionOption, PermissionOptionKind,
+    RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
+    SelectedPermissionOutcome, SessionNotification, SessionUpdate, StopReason,
 };
 use agent_client_protocol::{ByteStreams, Client, on_receive_request};
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
@@ -55,6 +56,38 @@ impl From<StopReason> for Stop {
             StopReason::Cancelled => Self::Cancelled,
             _ => Self::Unrecognized,
         }
+    }
+}
+
+/// What a worker wants to do that it may not do on its own.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Ask {
+    pub title: String,
+}
+
+/// What the core says to it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Decision {
+    Allow,
+    Refuse,
+}
+
+/// Who answers a worker's question.
+///
+/// Deciding may take as long as it takes: a worker that asked for something is
+/// stopped, and stopped is the correct state to be in until someone answers.
+#[async_trait::async_trait]
+pub trait Permission: Send + Sync {
+    async fn decide(&self, ask: &Ask) -> Decision;
+}
+
+/// The default answer: nobody is watching a worker.
+pub struct Refuse;
+
+#[async_trait::async_trait]
+impl Permission for Refuse {
+    async fn decide(&self, _ask: &Ask) -> Decision {
+        Decision::Refuse
     }
 }
 
@@ -118,10 +151,14 @@ impl Worker {
     /// Starts the harness, asks it one thing, and waits for it to stop talking.
     ///
     /// The child inherits this process's stderr, so a harness's own complaints
-    /// stay visible instead of filling a pipe nobody reads. Every permission it
-    /// asks for is refused: nobody is watching a worker, so it must not be able
-    /// to do something that needed a person.
-    pub async fn talk(&self, prompt: &str) -> crate::Result<Turn> {
+    /// stay visible instead of filling a pipe nobody reads. A permission request
+    /// is answered by `permission`, and answering it is allowed to take a while:
+    /// the worker waits, which is what "stopped on a question" looks like.
+    pub async fn talk(
+        &self,
+        prompt: &str,
+        permission: Arc<dyn Permission>,
+    ) -> crate::Result<Turn> {
         let mut child = self
             .program_command()
             .args(&self.args)
@@ -149,12 +186,29 @@ impl Worker {
 
         let prompt = prompt.to_owned();
         let cwd = self.cwd.clone();
+        let asked = Arc::clone(&permission);
 
         Client
             .v1()
             .on_receive_request(
-                async |request: RequestPermissionRequest, responder, _connection| {
-                    responder.respond(refusal(&request))
+                async move |request: RequestPermissionRequest, responder, _connection| {
+                    let permission = Arc::clone(&asked);
+                    let ask = Ask {
+                        title: request
+                            .tool_call
+                            .fields
+                            .title
+                            .clone()
+                            .unwrap_or_else(|| "要动工作区之外的什么东西".to_owned()),
+                    };
+                    let options = request.options.clone();
+
+                    tokio::spawn(async move {
+                        let decision = permission.decide(&ask).await;
+                        let _ = responder.respond(reply(decision, &options));
+                    });
+
+                    Ok(())
                 },
                 on_receive_request!(),
             )
@@ -210,24 +264,33 @@ impl Worker {
             .await
             .map_err(Into::into)
     }
+
+    /// For callers that only ever refuse.
+    pub async fn talk_refusing(&self, prompt: &str) -> crate::Result<Turn> {
+        self.talk(prompt, Arc::new(Refuse)).await
+    }
 }
 
-/// Refuses a permission request by name, falling back to cancelling it when the
-/// harness offered no way to say no.
-fn refusal(request: &RequestPermissionRequest) -> RequestPermissionResponse {
-    let reject = request
-        .options
+/// Answers by name, never by position: the narrow form of whatever was decided,
+/// or a cancellation when the harness offered no way to say it.
+fn reply(decision: Decision, options: &[PermissionOption]) -> RequestPermissionResponse {
+    let wanted = match decision {
+        Decision::Allow => [
+            PermissionOptionKind::AllowOnce,
+            PermissionOptionKind::AllowAlways,
+        ],
+        Decision::Refuse => [
+            PermissionOptionKind::RejectOnce,
+            PermissionOptionKind::RejectAlways,
+        ],
+    };
+
+    let chosen = wanted
         .iter()
-        .find(|option| option.kind == PermissionOptionKind::RejectOnce)
-        .or_else(|| {
-            request
-                .options
-                .iter()
-                .find(|option| option.kind == PermissionOptionKind::RejectAlways)
-        })
+        .find_map(|kind| options.iter().find(|option| option.kind == *kind))
         .map(|option| option.option_id.clone());
 
-    let outcome = match reject {
+    let outcome = match chosen {
         Some(option_id) => {
             RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(option_id))
         }

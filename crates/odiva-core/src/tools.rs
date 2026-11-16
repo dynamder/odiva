@@ -253,6 +253,57 @@ impl AgentTool for Cancel {
 }
 
 /// The whole task surface, as one roster entry point.
+#[derive(Debug, Deserialize)]
+struct PermitArgs {
+    id: String,
+    allow: bool,
+}
+
+pub struct Permit {
+    tasks: Arc<Tasks>,
+}
+
+impl Permit {
+    pub fn new(tasks: Arc<Tasks>) -> Self {
+        Self { tasks }
+    }
+}
+
+#[async_trait]
+impl AgentTool for Permit {
+    fn name(&self) -> &str {
+        "task_permit"
+    }
+
+    fn label(&self) -> &str {
+        "批或不批"
+    }
+
+    fn description(&self) -> &str {
+        "回答一个停在权限请求上的任务。它问的是能不能动工作区外面，\
+         你自己不该替对方拍这个板：先把问题说给对方听，再按对方的回答调这个。"
+    }
+
+    fn parameters_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "id": { "type": "string" },
+                "allow": { "type": "boolean", "description": "真就是允许这一次，假就是不要。" }
+            },
+            "required": ["id", "allow"]
+        })
+    }
+
+    async fn execute(&self, params: Value, _ctx: ToolContext) -> Result<ToolResult, ToolError> {
+        let args: PermitArgs = serde_json::from_value(params)
+            .map_err(|error| ToolError::InvalidArgs(error.to_string()))?;
+
+        self.tasks.permit(&args.id, args.allow).map_err(failed)?;
+        Ok(said(if args.allow { "批了。" } else { "拒了。" }))
+    }
+}
+
 pub fn roster(tasks: &Arc<Tasks>, origin: Origin) -> Vec<Box<dyn AgentTool>> {
     vec![
         Box::new(Dispatch::new(Arc::clone(tasks), origin)),
@@ -260,5 +311,6 @@ pub fn roster(tasks: &Arc<Tasks>, origin: Origin) -> Vec<Box<dyn AgentTool>> {
         Box::new(Read::new(Arc::clone(tasks))),
         Box::new(Answer::new(Arc::clone(tasks))),
         Box::new(Cancel::new(Arc::clone(tasks))),
+        Box::new(Permit::new(Arc::clone(tasks))),
     ]
 }

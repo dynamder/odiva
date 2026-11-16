@@ -59,9 +59,10 @@ Busy  =  ¬Idle
 | `web` | 可用 | 可用 |
 | `task_dispatch` | self 任务 | user 任务 |
 | `task_brief / answer / cancel / list / read` | 可用 | 可用 |
-| 提权（ACP `request_permission`） | 一律拒绝 | 透传：任务名 + 请求说明 |
+| 提权（ACP `request_permission`） | 一律拒绝 | 停下并问人：`OnPermission` 占着槽，`task_permit` 回答 |
 | `yield` / `cancel_yield` | 收到用户消息时存在 | — |
 | `request_idle` | — | 存在未完成任务时始终存在 |
+| `task_permit` | — | 有任务停在权限上时用 |
 
 busy 禁掉记忆的一切操作，于是"模型把任务细节写进记忆"这个失败模式在结构上不存在；忙的时候要查记忆，只能用 `request_idle` 回到 idle —— 这也让那个工具有了正当理由。
 

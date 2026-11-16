@@ -20,7 +20,7 @@ fn harness(script: &str) -> Worker {
 }
 
 async fn talk(script: &str) -> Turn {
-    tokio::time::timeout(TIMEOUT, harness(script).talk("查一下日志"))
+    tokio::time::timeout(TIMEOUT, harness(script).talk_refusing("查一下日志"))
         .await
         .expect("the turn finished in time")
         .expect("the turn finished")
@@ -44,7 +44,7 @@ async fn a_permission_request_is_refused_by_name() {
 
 #[tokio::test]
 async fn a_harness_that_dies_is_an_error_not_a_hang() {
-    let failure = tokio::time::timeout(TIMEOUT, harness("crash").talk("查一下日志"))
+    let failure = tokio::time::timeout(TIMEOUT, harness("crash").talk_refusing("查一下日志"))
         .await
         .expect("the failure came back in time");
 

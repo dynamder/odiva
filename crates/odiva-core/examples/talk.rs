@@ -24,7 +24,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         worker = worker.arg(arg);
     }
 
-    let turn = worker.talk("用一句话说明你是做什么的。").await?;
+    let turn = worker.talk_refusing("用一句话说明你是做什么的。").await?;
 
     println!("stop: {:?}", turn.stop);
     println!("said: {}", turn.said);

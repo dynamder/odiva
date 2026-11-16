@@ -4,14 +4,16 @@
 //! slot is free, and returns — the answer arrives later, as an event the engine
 //! delivers when it has nothing else to do.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use serde_json::json;
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
+use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
+use crate::acp::Decision;
 use crate::error::{Error, Result};
 use crate::harness::Harness;
 use crate::task::{Ledger, Origin, Outcome, Report, Status, Task};
@@ -31,6 +33,7 @@ pub struct Tasks {
     running: Mutex<BTreeMap<String, JoinHandle<()>>>,
     harness: Harness,
     nudges: UnboundedSender<Nudge>,
+    permits: Mutex<HashMap<String, oneshot::Sender<Decision>>>,
     slots: usize,
 }
 
@@ -47,6 +50,7 @@ impl Tasks {
             running: Mutex::new(BTreeMap::new()),
             harness,
             nudges,
+            permits: Mutex::new(HashMap::new()),
             slots: slots.max(1),
         });
 
@@ -126,6 +130,50 @@ impl Tasks {
         Ok(())
     }
 
+    /// Answers the question a worker is stopped on.
+    pub fn permit(&self, id: &str, allow: bool) -> Result<()> {
+        let asker = self
+            .permits
+            .lock()
+            .expect("no panic on the permits")
+            .remove(id);
+
+        match asker {
+            Some(asker) => {
+                let _ = asker.send(if allow {
+                    Decision::Allow
+                } else {
+                    Decision::Refuse
+                });
+                Ok(())
+            }
+            None => Err(Error::Disk(format!("{id} 没有在问什么"))),
+        }
+    }
+
+    /// Parks the task on the question and returns the line the answer arrives on.
+    fn ask_permission(&self, id: &str, ask: &crate::acp::Ask) -> oneshot::Receiver<Decision> {
+        let (sender, receiver) = oneshot::channel();
+
+        {
+            let mut ledger = self.ledger.lock().expect("no panic on the ledger");
+
+            if let Ok(mut task) = ledger.get(id) {
+                task.status = Status::OnPermission(ask.title.clone());
+                let _ = ledger.put(task);
+            }
+        }
+
+        self.permits
+            .lock()
+            .expect("no panic on the permits")
+            .insert(id.to_owned(), sender);
+
+        let _ = self.nudges.send(Nudge { id: id.to_owned() });
+
+        receiver
+    }
+
     /// Stops a task where it stands.
     pub fn cancel(self: &Arc<Self>, id: &str) -> Result<()> {
         if let Some(handle) = self
@@ -187,9 +235,16 @@ impl Tasks {
         let prompt = brief_prompt(&task.brief);
         let id = task.id.clone();
         let tasks = Arc::clone(self);
+        let permission: Arc<dyn crate::acp::Permission> = match task.origin {
+            Origin::User => Arc::new(AskPermission {
+                tasks: Arc::clone(self),
+                id: task.id.clone(),
+            }),
+            Origin::Own => Arc::new(crate::acp::Refuse),
+        };
 
         let handle = tokio::spawn(async move {
-            let outcome = worker.talk(&prompt).await;
+            let outcome = worker.talk(&prompt, permission).await;
             tasks.settle(&id, outcome);
         });
 
@@ -237,8 +292,28 @@ impl Tasks {
             .lock()
             .expect("no panic on the running map")
             .remove(id);
+        self.permits
+            .lock()
+            .expect("no panic on the permits")
+            .remove(id);
         self.fill_slots();
         let _ = self.nudges.send(Nudge { id: id.to_owned() });
+    }
+}
+
+/// A worker's question, answered by whoever calls [`Tasks::permit`].
+struct AskPermission {
+    tasks: Arc<Tasks>,
+    id: String,
+}
+
+#[async_trait::async_trait]
+impl crate::acp::Permission for AskPermission {
+    async fn decide(&self, ask: &crate::acp::Ask) -> Decision {
+        self.tasks
+            .ask_permission(&self.id, ask)
+            .await
+            .unwrap_or(Decision::Refuse)
     }
 }
 

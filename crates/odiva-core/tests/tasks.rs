@@ -118,3 +118,41 @@ async fn the_ledger_survives_being_read_again() {
     assert_eq!(task.status, Status::OnTrigger);
     assert_eq!(task.brief, "留下一条记录");
 }
+
+#[tokio::test]
+async fn a_worker_that_asks_waits_on_a_verdict() {
+    let (tasks, _nudges) =
+        Tasks::new(scratch("permit"), harness("permission"), 3).expect("a ledger");
+
+    let id = tasks
+        .dispatch(Origin::User, "删掉 migrate_v1.sh".to_owned())
+        .expect("a task");
+
+    let mut asked = None;
+
+    for _ in 0..200 {
+        let task = tasks.get(&id).expect("the task is in the ledger");
+
+        if let Status::OnPermission(question) = &task.status {
+            asked = Some(question.clone());
+            break;
+        }
+
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+
+    let question = asked.expect("the worker asked before it was allowed to act");
+    assert!(
+        question.contains("migrate_v1.sh"),
+        "the question carries the tool call's title: {question}"
+    );
+
+    tasks.permit(&id, false).expect("a verdict");
+
+    let task = settled(&tasks, &id).await;
+    assert!(
+        task.said.contains("denied:reject-once"),
+        "the worker was told no, by name: {}",
+        task.said
+    );
+}

@@ -18,6 +18,8 @@ pub enum Status {
     OnHarness,
     /// A turn ended and it is waiting for words from us.
     OnInstruction,
+    /// Stuck on a permission request, waiting for a person or for her.
+    OnPermission(String),
     /// Waiting for a free slot.
     OnSlot,
     /// Done, waiting for the next thing.
@@ -29,13 +31,14 @@ pub enum Status {
 impl Status {
     /// Whether this task is occupying a slot.
     pub fn holds_a_slot(&self) -> bool {
-        matches!(self, Self::OnHarness)
+        matches!(self, Self::OnHarness | Self::OnPermission(_))
     }
 
     pub fn card(&self) -> &'static str {
         match self {
             Self::OnHarness => "在跑",
             Self::OnInstruction => "等你说话",
+            Self::OnPermission(_) => "等你批准",
             Self::OnSlot => "排队",
             Self::OnTrigger => "已完成",
             Self::Failed(_) => "失败",
@@ -111,6 +114,7 @@ impl Task {
     fn headline(&self) -> String {
         match &self.status {
             Status::Failed(reason) => reason.clone(),
+            Status::OnPermission(ask) => ask.clone(),
             _ => match &self.report {
                 Some(report) => match report.status {
                     Outcome::Done => "完成了".to_owned(),
@@ -214,7 +218,7 @@ impl Ledger {
             .filter(|task| {
                 matches!(
                     task.status,
-                    Status::OnHarness | Status::OnInstruction | Status::OnSlot
+                    Status::OnHarness | Status::OnInstruction | Status::OnPermission(_) | Status::OnSlot
                 )
             })
             .cloned()
