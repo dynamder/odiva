@@ -16,6 +16,7 @@ pub type MessageId = u64;
 
 /// Who a message came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Side {
     User,
     Assistant,
@@ -32,6 +33,7 @@ pub enum Presence {
 /// A file attached to a message: the name and size a messenger shows. Where the
 /// bytes live is the core's business.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct FileRef {
     pub name: String,
     pub size: String,
@@ -42,6 +44,7 @@ pub struct FileRef {
 /// The body is markdown rather than a block array, so "what a message can
 /// contain" is exactly "what a chat application can contain".
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct WireMessage {
     pub id: MessageId,
     pub from: Side,

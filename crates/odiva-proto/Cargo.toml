@@ -8,5 +8,10 @@ publish.workspace = true
 
 # No dependencies, on purpose. This crate is the contract, and a contract that
 # can reach into `tokio` or `iced` is a contract that will eventually describe
-# one of them instead of the interface.
+# one of them instead of the interface. `serde` is the one exception, off by
+# default: the window's transcript is stored as itself, not as a copy of it.
+[features]
+serde = ["dep:serde"]
+
 [dependencies]
+serde = { workspace = true, optional = true }

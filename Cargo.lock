@@ -3049,6 +3049,9 @@ dependencies = [
 [[package]]
 name = "odiva-proto"
 version = "0.1.0"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "once_cell"

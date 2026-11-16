@@ -5,9 +5,10 @@
 //! said, which is a legitimate outcome and not a failure to recover from.
 
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use odiva_proto::{CoreMessage, FileRef};
+use odiva_proto::{CoreMessage, FileRef, WireMessage};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::sync::mpsc::UnboundedSender;
@@ -25,15 +26,39 @@ struct Args {
     replies: Vec<String>,
 }
 
+/// What she said during one activation, in order.
+///
+/// The tool records it, the lane writes it: a message the person saw is a
+/// message the lane keeps, even when the turn was cut short afterwards.
+#[derive(Debug, Clone, Default)]
+pub struct Said {
+    messages: Arc<Mutex<Vec<WireMessage>>>,
+}
+
+impl Said {
+    fn note(&self, message: WireMessage) {
+        self.messages
+            .lock()
+            .expect("no panic while recording")
+            .push(message);
+    }
+
+    /// Everything said since the last drain, oldest first.
+    pub fn drain(&self) -> Vec<WireMessage> {
+        std::mem::take(&mut *self.messages.lock().expect("no panic while recording"))
+    }
+}
+
 /// The tool named `say`.
 pub struct Say {
     out: UnboundedSender<CoreMessage>,
     ids: Ids,
+    said: Said,
 }
 
 impl Say {
-    pub fn new(out: UnboundedSender<CoreMessage>, ids: Ids) -> Self {
-        Self { out, ids }
+    pub fn new(out: UnboundedSender<CoreMessage>, ids: Ids, said: Said) -> Self {
+        Self { out, ids, said }
     }
 }
 
@@ -89,6 +114,7 @@ impl AgentTool for Say {
         message.files = files;
         message.replies = args.replies;
 
+        self.said.note(message.clone());
         self.out
             .send(CoreMessage::MessageAppended { message })
             .map_err(|_| ToolError::Failed("没有窗口在听".to_owned()))?;
