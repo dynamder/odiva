@@ -20,7 +20,7 @@
 
 use std::ops::Range;
 
-use iced_core::{Element, Pixels, Size};
+use iced_core::{Element, Length, Pixels, Size};
 use iced_widget::Column;
 use iced_widget::scrollable::{AbsoluteOffset, Viewport};
 use iced_widget::space;
@@ -133,6 +133,15 @@ impl Slice {
     ///
     /// The spacing is zero on purpose: a `Column` adds its spacing between every
     /// pair, which would grow the content by `2 * spacing` on every rebuild.
+    ///
+    /// The height is pinned to the slice's total, and that is what keeps the
+    /// invariant true while heights are still being discovered. Without it the
+    /// content's real height is "padding plus whatever the built rows laid out
+    /// to", which equals the table's total only once every one of them has been
+    /// measured. A gap of a few pixels is enough for the scrollable to clamp an
+    /// offset against one number while the list was built from the other: a row
+    /// enters, the content shrinks, the clamp moves the view, another row
+    /// enters — and at the bottom edge of a row that is exactly the flicker.
     pub fn surround<'a, Message, Theme, Renderer>(
         &self,
         content: impl Into<Element<'a, Message, Theme, Renderer>>,
@@ -148,6 +157,7 @@ impl Slice {
             space().height(self.after).into(),
         ]))
         .spacing(0.0)
+        .height(Length::Fixed(self.total))
         .into()
     }
 }
@@ -413,8 +423,9 @@ impl Measured {
             return false;
         }
 
-        let width = size.width.round();
-        let reflowed = self.width.is_some_and(|known| known.round() != width);
+        let reflowed = self
+            .width
+            .is_some_and(|known| (known - size.width).abs() > 1.0);
 
         if reflowed {
             self.heights.fill(SlotHeight::Estimated);
@@ -424,7 +435,13 @@ impl Measured {
 
         let total_before = self.total();
 
-        self.heights[slot] = SlotHeight::Measured(size.height.max(0.0));
+        let height = size.height.max(0.0);
+
+        if !reflowed && (self.height_of(slot) - height).abs() < 0.5 {
+            return false;
+        }
+
+        self.heights[slot] = SlotHeight::Measured(height);
         self.rebuild_prefix(if reflowed { 0 } else { slot });
 
         self.total() != total_before
@@ -736,5 +753,40 @@ mod tests {
         assert_eq!(path.top(3), 2.0 * 40.0 + 100.0);
         assert_eq!(path.slot_at(0.0), 0);
         assert_eq!(path.slice_at(0.0, 80.0).total(), path.total());
+    }
+}
+
+#[cfg(test)]
+mod settling {
+    use super::*;
+
+    const ROW: f32 = 24.0;
+
+    #[test]
+    fn a_remeasure_below_half_a_pixel_is_not_a_change() {
+        let mut slots = measured(ROW, 3);
+
+        assert!(slots.measure(0, Size::new(600.0, ROW * 2.0)));
+        assert!(
+            !slots.measure(0, Size::new(600.0, ROW * 2.0 + 0.3)),
+            "sub-pixel wobble must not rebuild the list"
+        );
+        assert!(slots.measure(0, Size::new(600.0, ROW * 2.0 + 4.0)));
+    }
+
+    #[test]
+    fn a_width_that_wobbles_by_a_pixel_does_not_reflow() {
+        let mut slots = measured(ROW, 3);
+
+        slots.measure(1, Size::new(600.0, ROW * 2.0));
+        assert!(!slots.is_measured(0), "only slot one was measured");
+
+        slots.measure(0, Size::new(600.6, ROW * 2.0));
+
+        assert!(slots.is_measured(0));
+        assert!(
+            slots.is_measured(1),
+            "a hair of width must not throw away every measurement"
+        );
     }
 }
