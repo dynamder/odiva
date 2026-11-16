@@ -1,7 +1,8 @@
 //! The engine: the part that stays.
 //!
-//! It owns the paths, the ids, the queue of things waiting to be said to her, and
-//! nothing else. Everything that thinks is an activation it builds and drops.
+//! It owns the paths, the ids, the queue of things waiting to be said to her,
+//! and the task ledger. Everything that thinks is an activation it builds and
+//! drops.
 
 use std::sync::Arc;
 
@@ -9,12 +10,16 @@ use odiva_proto::{CoreHandle, CoreMessage, Presence, Snapshot, UiMessage, WireMe
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 use crate::error::Result;
+use crate::harness::Harness;
 use crate::ids::Ids;
 use crate::roster::Roster;
 use crate::route::Route;
 use crate::say::{Said, Say};
 use crate::store::{Lane, Store, TALK};
 use crate::talk::Talk;
+use crate::task::Origin;
+use crate::tasks::{Nudge, Tasks, reading};
+use crate::tools;
 use crate::waiting::Waiting;
 
 /// The window's end of the wire.
@@ -29,7 +34,7 @@ impl CoreHandle for Handle {
     }
 }
 
-/// What survives a turn: the store, the counter, and who is waiting.
+/// What survives a turn: the store, the counter, the ledger, who is waiting.
 pub struct Engine {
     store: Store,
     ids: Ids,
@@ -37,7 +42,9 @@ pub struct Engine {
     prompt: String,
     out: UnboundedSender<CoreMessage>,
     inbox: Option<UnboundedReceiver<UiMessage>>,
+    nudges: Option<UnboundedReceiver<Nudge>>,
     waiting: Waiting,
+    tasks: Arc<Tasks>,
 }
 
 impl Engine {
@@ -45,9 +52,11 @@ impl Engine {
         store: Store,
         route: Arc<dyn Route>,
         prompt: impl Into<String>,
-    ) -> (Self, Handle, UnboundedReceiver<CoreMessage>) {
+        harness: Harness,
+    ) -> Result<(Self, Handle, UnboundedReceiver<CoreMessage>)> {
         let (out, messages) = unbounded_channel();
         let (handle, inbox) = unbounded_channel();
+        let (tasks, nudges) = Tasks::new(store.tasks(), harness, crate::tasks::SLOTS)?;
 
         let engine = Self {
             store,
@@ -56,30 +65,47 @@ impl Engine {
             prompt: prompt.into(),
             out,
             inbox: Some(inbox),
+            nudges: Some(nudges),
             waiting: Waiting::default(),
+            tasks,
         };
 
-        (engine, Handle { out: handle }, messages)
+        Ok((engine, Handle { out: handle }, messages))
     }
 
     /// Attaches, then answers as long as the window is there.
     pub async fn run(mut self) {
-        let Some(mut inbox) = self.inbox.take() else {
+        let (Some(mut inbox), Some(mut nudges)) = (self.inbox.take(), self.nudges.take()) else {
             return;
         };
 
         self.attach();
 
-        while let Some(message) = inbox.recv().await {
-            match message {
-                UiMessage::UserSubmittedText { text } => {
-                    self.turn(text, &mut inbox).await;
+        loop {
+            tokio::select! {
+                message = inbox.recv() => {
+                    let Some(message) = message else {
+                        break;
+                    };
 
-                    while let Some(queued) = self.waiting.next() {
-                        self.turn(queued, &mut inbox).await;
+                    match message {
+                        UiMessage::UserSubmittedText { text } => {
+                            self.turn(text, &mut inbox).await;
+
+                            while let Some(queued) = self.waiting.next() {
+                                self.turn(queued, &mut inbox).await;
+                            }
+                        }
+                        UiMessage::UserRequestedStop => {}
                     }
                 }
-                UiMessage::UserRequestedStop => {}
+                nudge = nudges.recv() => {
+                    let Some(nudge) = nudge else {
+                        continue;
+                    };
+
+                    self.notice(&nudge.id, &mut inbox).await;
+                }
             }
         }
     }
@@ -99,15 +125,43 @@ impl Engine {
         self.emit(CoreMessage::CoreAttachedSession { snapshot });
     }
 
+    /// Something the person said.
     async fn turn(&mut self, text: String, inbox: &mut UnboundedReceiver<UiMessage>) {
         let user = self.ids.theirs(text);
 
         self.emit(CoreMessage::MessageAppended {
             message: user.clone(),
         });
+
+        self.answer(&user.markdown, Some(&user), inbox).await;
+    }
+
+    /// Something that happened outside the conversation.
+    ///
+    /// Not a user message: it enters the model's context and nothing else, so
+    /// the transcript stays a record of what was actually said.
+    async fn notice(&mut self, id: &str, inbox: &mut UnboundedReceiver<UiMessage>) {
+        let Ok(task) = self.tasks.get(id) else {
+            return;
+        };
+
+        let text = format!(
+            "（后台的变化，不是对方说的）\n\n{}\n\n要不要说、说什么，你决定。",
+            reading(&task)
+        );
+
+        self.answer(&text, None, inbox).await;
+    }
+
+    async fn answer(
+        &mut self,
+        prompt: &str,
+        user: Option<&WireMessage>,
+        inbox: &mut UnboundedReceiver<UiMessage>,
+    ) {
         self.presence(Presence::Typing);
 
-        let outcome = self.answer(&user, inbox).await;
+        let outcome = self.run_activation(prompt, user, inbox).await;
 
         self.presence(Presence::Online);
 
@@ -116,9 +170,10 @@ impl Engine {
         }
     }
 
-    async fn answer(
+    async fn run_activation(
         &mut self,
-        user: &WireMessage,
+        prompt: &str,
+        user: Option<&WireMessage>,
         inbox: &mut UnboundedReceiver<UiMessage>,
     ) -> Result<()> {
         let said = Said::default();
@@ -130,9 +185,11 @@ impl Engine {
             said,
         )?;
 
-        talk.note(user)?;
+        if let Some(user) = user {
+            talk.note(user)?;
+        }
 
-        let mut running = Box::pin(talk.run(&user.markdown));
+        let mut running = Box::pin(talk.run(prompt));
 
         loop {
             tokio::select! {
@@ -152,12 +209,17 @@ impl Engine {
     }
 
     fn roster(&self, said: &Said) -> Roster {
-        Roster::of(vec![Box::new(Say::new(
+        let mut tools = Vec::new();
+
+        tools.push(Box::new(Say::new(
             self.out.clone(),
             self.ids.clone(),
             said.clone(),
-        ))])
-        .sourcing(Arc::new(self.waiting.clone()))
+        )) as Box<dyn yoagent::types::AgentTool>);
+
+        tools.extend(tools::roster(&self.tasks, Origin::User));
+
+        Roster::of(tools).sourcing(Arc::new(self.waiting.clone()))
     }
 
     fn emit(&self, message: CoreMessage) {

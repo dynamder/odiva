@@ -19,7 +19,7 @@ use agent_client_protocol::v1::schema::{
     RequestPermissionRequest, RequestPermissionResponse, SelectedPermissionOutcome,
     SessionNotification, SessionUpdate, StopReason,
 };
-use agent_client_protocol::{ByteStreams, Client, Error, Result, on_receive_request};
+use agent_client_protocol::{ByteStreams, Client, on_receive_request};
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
 /// What a harness said in one turn, and why it stopped.
@@ -121,7 +121,7 @@ impl Worker {
     /// stay visible instead of filling a pipe nobody reads. Every permission it
     /// asks for is refused: nobody is watching a worker, so it must not be able
     /// to do something that needed a person.
-    pub async fn talk(&self, prompt: &str) -> Result<Turn> {
+    pub async fn talk(&self, prompt: &str) -> crate::Result<Turn> {
         let mut child = self
             .program_command()
             .args(&self.args)
@@ -133,10 +133,7 @@ impl Worker {
             .kill_on_drop(true)
             .spawn()
             .map_err(|error| {
-                Error::internal_error().data(format!(
-                    "cannot start {}: {error}",
-                    self.program.display()
-                ))
+                crate::Error::Harness(format!("cannot start {}: {error}", self.program.display()))
             })?;
 
         let outgoing = child
@@ -211,6 +208,7 @@ impl Worker {
                     .await
             })
             .await
+            .map_err(Into::into)
     }
 }
 

@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use odiva_core::{Engine, Handle, Lane, Route, Scripted, Store};
+use odiva_core::{Engine, Handle, Harness, Lane, Route, Scripted, Store};
 use odiva_proto::{CoreHandle, CoreMessage, Presence, Side, UiMessage};
 use serde_json::json;
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -36,9 +36,17 @@ fn done() -> MockResponse {
     MockResponse::Text("好。".to_owned())
 }
 
-fn scripted(turns: Vec<Vec<MockResponse>>, store: &Store) -> (Handle, UnboundedReceiver<CoreMessage>) {
+fn harness(script: &str) -> Harness {
+    Harness::new(env!("CARGO_BIN_EXE_fake_harness")).env("ODIVA_FAKE_SCRIPT", script)
+}
+
+fn scripted(
+    turns: Vec<Vec<MockResponse>>,
+    store: &Store,
+) -> (Handle, UnboundedReceiver<CoreMessage>) {
     let route = Arc::new(Scripted::new(turns));
-    let (engine, handle, messages) = Engine::new(store.clone(), route, PROMPT);
+    let (engine, handle, messages) =
+        Engine::new(store.clone(), route, PROMPT, harness("chat")).expect("an engine");
 
     tokio::spawn(engine.run());
     (handle, messages)
@@ -200,7 +208,7 @@ impl StreamProvider for Patient {
 async fn a_message_sent_mid_turn_waits_its_turn() {
     let store = scratch("engine-queued");
     let route = Arc::new(Patient::default());
-    let (engine, handle, mut inbox) = Engine::new(store, route, PROMPT);
+    let (engine, handle, mut inbox) = Engine::new(store, route, PROMPT, harness("chat")).expect("an engine");
     tokio::spawn(engine.run());
 
     handle.send(UiMessage::UserSubmittedText {
@@ -224,7 +232,7 @@ async fn a_message_sent_mid_turn_waits_its_turn() {
 async fn stopping_ends_the_turn_without_an_answer() {
     let store = scratch("engine-stop");
     let route = Arc::new(Patient::default());
-    let (engine, handle, mut inbox) = Engine::new(store, route, PROMPT);
+    let (engine, handle, mut inbox) = Engine::new(store, route, PROMPT, harness("chat")).expect("an engine");
     tokio::spawn(engine.run());
 
     handle.send(UiMessage::UserSubmittedText {
@@ -241,4 +249,52 @@ async fn stopping_ends_the_turn_without_an_answer() {
             presence: Presence::Online
         }
     ));
+}
+
+#[tokio::test]
+async fn a_dispatched_task_comes_back_as_a_sentence() {
+    let store = scratch("engine-dispatch");
+    let (handle, mut inbox) = scripted(
+        vec![
+            vec![
+                MockResponse::ToolCalls(vec![MockToolCall {
+                    name: "task_dispatch".to_owned(),
+                    arguments: json!({ "goal": "改 README 的启动命令" }),
+                    provider_metadata: None,
+                }]),
+                done(),
+            ],
+            vec![saying("改完了，README 的命令换成新的了。"), done()],
+        ],
+        &store,
+    );
+
+    handle.send(UiMessage::UserSubmittedText {
+        text: "把 README 的启动命令改一下".to_owned(),
+    });
+
+    let mut seen = Vec::new();
+
+    loop {
+        let message = tokio::time::timeout(Duration::from_secs(10), inbox.recv())
+            .await
+            .expect("the engine kept talking")
+            .expect("the engine is alive");
+
+        let answered = matches!(
+            &message,
+            CoreMessage::MessageAppended { message } if message.from == Side::Assistant
+        );
+
+        seen.push(message);
+
+        if answered {
+            break;
+        }
+    }
+
+    assert_eq!(
+        bubbles(&seen).last(),
+        Some(&(Side::Assistant, "改完了，README 的命令换成新的了。".to_owned()))
+    );
 }

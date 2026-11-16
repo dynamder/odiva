@@ -1,7 +1,8 @@
 //! A harness for tests: it speaks ACP v1 on stdio and follows a canned script.
 //!
 //! `ODIVA_FAKE_SCRIPT` picks the script: `chat` says two things and finishes,
-//! `permission` asks for something first, `crash` dies before the handshake.
+//! `permission` asks for something first, `need` asks for words with a report
+//! envelope, `crash` dies before the handshake.
 //!
 //! Handlers run on the connection's event loop, so none of them waits for the
 //! peer: a handler either answers, or registers a callback that answers.
@@ -23,6 +24,7 @@ const SESSION: &str = "fake-session";
 enum Script {
     Chat,
     Permission,
+    Need,
     Crash,
 }
 
@@ -30,6 +32,7 @@ impl Script {
     fn from_env() -> Self {
         match env::var("ODIVA_FAKE_SCRIPT").as_deref() {
             Ok("permission") => Self::Permission,
+            Ok("need") => Self::Need,
             Ok("crash") => Self::Crash,
             _ => Self::Chat,
         }
@@ -80,6 +83,16 @@ fn answer(
     responder: Responder<PromptResponse, V1>,
     connection: ConnectionTo<Client>,
 ) -> Result<()> {
+    if script == Script::Need {
+        say(
+            &connection,
+            "要动 `migrate_v1.sh` 得先确认一件事。\n\n```report\n\
+             {\"status\": \"need\", \"question\": \"这个脚本还有别处引用，删掉吗？\"}\n```",
+        )?;
+
+        return responder.respond(PromptResponse::new(StopReason::EndTurn));
+    }
+
     if script != Script::Permission {
         say(&connection, "README 改完了。")?;
         say(&connection, "日志那边还有个发现。")?;
