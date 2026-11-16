@@ -4,6 +4,8 @@
 //! hand-built model. That makes every screenshot a test of the seam as well as a
 //! picture: if the protocol stops being enough to describe a conversation, the
 //! picture stops being producible.
+//!
+//! Times are fixed rather than "now", so the pictures are the same every run.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -12,6 +14,13 @@ use iced::{Element, Size, Task, Theme, window};
 
 use odiva::{App, Message, theme};
 use odiva_proto::{CoreMessage, FileRef, Presence, Side, Snapshot, WireMessage};
+
+/// A fixed clock. 2026-03-15T07:00:00Z, and every label below is relative to it.
+const NOW: i64 = 1_773_000_000_000;
+
+fn minutes_before(now: i64, minutes: i64) -> i64 {
+    now - minutes * 60_000
+}
 
 fn attached(messages: Vec<WireMessage>) -> CoreMessage {
     CoreMessage::CoreAttachedSession {
@@ -22,29 +31,42 @@ fn attached(messages: Vec<WireMessage>) -> CoreMessage {
     }
 }
 
-fn said(id: u64, from: Side, markdown: &str) -> WireMessage {
-    WireMessage::new(id, from, markdown)
+fn said(id: u64, sent: i64, from: Side, markdown: &str) -> WireMessage {
+    WireMessage::new(id, sent, from, markdown)
 }
 
 /// A request, an answer in pieces, and one question with replies.
 fn chat() -> Vec<CoreMessage> {
-    let mut question = said(5, Side::Assistant, "另外 README 第 12–18 行还是旧路径，我直接覆盖？");
+    let mut question = said(
+        5,
+        minutes_before(NOW, 7),
+        Side::Assistant,
+        "另外 README 第 12–18 行还是旧路径，我直接覆盖？",
+    );
     question.replies = vec!["改吧".to_owned(), "先看 diff".to_owned()];
 
     vec![attached(vec![
         said(
             1,
+            minutes_before(NOW, 9),
             Side::User,
             "odiva 的 ACP 客户端连不上 dsh，先看日志；顺便把 README 里的启动命令改一下",
         ),
-        said(2, Side::Assistant, "两个问题，我一起看。日志这边先抓到 `initialize` 这一段："),
+        said(
+            2,
+            minutes_before(NOW, 8),
+            Side::Assistant,
+            "两个问题，我一起看。日志这边先抓到 `initialize` 这一段：",
+        ),
         said(
             3,
+            minutes_before(NOW, 8),
             Side::Assistant,
             "```\nerror: initialize timed out after 30s\n  at acp::client::transport.rs:41\n```",
         ),
         said(
             4,
+            minutes_before(NOW, 7),
             Side::Assistant,
             "读完 214 行日志了，怀疑 stdio 没有 flush。继续查，有结论再跟你说。",
         ),
@@ -58,6 +80,7 @@ fn streaming() -> Vec<CoreMessage> {
 
     script.push(CoreMessage::MessageBegan {
         id: 6,
+        sent: NOW,
         from: Side::Assistant,
     });
     script.push(CoreMessage::PresenceChanged {
@@ -86,6 +109,7 @@ fn streaming() -> Vec<CoreMessage> {
 fn busy() -> Vec<CoreMessage> {
     let mut question = said(
         3,
+        minutes_before(NOW, 12),
         Side::Assistant,
         "`migrate_v1.sh` 还有别的地方在引用，删之前要不要我全仓搜一遍？",
     );
@@ -93,6 +117,7 @@ fn busy() -> Vec<CoreMessage> {
 
     let mut report = said(
         2,
+        minutes_before(NOW, 13),
         Side::Assistant,
         "拆成六件，五件已经在跑了。
 
@@ -108,13 +133,46 @@ fn busy() -> Vec<CoreMessage> {
         size: "3.1 KB".to_owned(),
     });
 
-    vec![
-        attached(vec![
-            said(1, Side::User, "这周的几件事都推进一下，顺手把那个 flaky 测试修了"),
-            report,
-            question,
-        ]),
-    ]
+    vec![attached(vec![
+        said(
+            1,
+            minutes_before(NOW, 14),
+            Side::User,
+            "这周的几件事都推进一下，顺手把那个 flaky 测试修了",
+        ),
+        report,
+        question,
+    ])]
+}
+
+/// A conversation long enough that building it whole would be the bug.
+///
+/// 300 messages, most of them short, a few with code. The picture should show
+/// the last screenful, and the test beside it should show that only a screenful
+/// was built.
+fn long() -> Vec<CoreMessage> {
+    let mut messages = Vec::new();
+
+    for slot in 0..300u64 {
+        let from = if slot % 2 == 0 {
+            Side::User
+        } else {
+            Side::Assistant
+        };
+
+        let markdown = match slot % 37 {
+            0 => "```sh\ncargo test --workspace --offline\n```".to_owned(),
+            5 => format!("第 {slot} 条：这一条的用处是让列表足够长，长到必须开窗。"),
+            _ => format!(
+                "第 {slot} 条消息。{}",
+                "这一行故意写长一点，让高度不均匀，虚拟列表的估算才有东西可纠正。"
+            ),
+        };
+
+        messages.push(said(slot + 1, minutes_before(NOW, 300 - slot as i64), from, &markdown));
+    }
+
+    vec![attached(messages)]
 }
 
 /// Which conversation to photograph.
@@ -125,6 +183,7 @@ enum Fixture {
     Chat,
     Streaming,
     Busy,
+    Long,
 }
 
 impl Fixture {
@@ -134,6 +193,7 @@ impl Fixture {
             Self::Chat => chat(),
             Self::Streaming => streaming(),
             Self::Busy => busy(),
+            Self::Long => long(),
         }
     }
 }
@@ -174,10 +234,15 @@ impl iced::Program for Harness {
     }
 
     fn boot(&self) -> (App, Task<Message>) {
-        let mut app = App::empty().with_theme(self.palette());
+        let mut app = App::empty()
+            .with_theme(self.palette())
+            .with_clock(NOW)
+            // The transcript band of a 1040x700 window: the header, two hairlines
+            // and the composer take the rest.
+            .with_viewport(583.0);
 
         for message in self.fixture.script() {
-            app.apply(message);
+            let _ = app.apply(message);
         }
 
         (app.following(self.following), Task::none())
@@ -221,6 +286,8 @@ fn render_screenshots() {
         ("chat-streaming", Fixture::Streaming, false, false),
         // The one that decides the design: six jobs, two messages.
         ("chat-busy", Fixture::Busy, true, false),
+        // 300 messages, one screenful built.
+        ("chat-long", Fixture::Long, true, false),
         // The same description rendered by another theme, which is the claim a
         // palette makes.
         ("chat-light", Fixture::Chat, true, true),

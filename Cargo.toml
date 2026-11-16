@@ -34,3 +34,7 @@ png = "0.18"
 
 ericed = { path = "crates/ericed" }
 odiva-proto = { path = "crates/odiva-proto" }
+# Time labels need the reader's calendar, not just UTC: "昨天 15:42" is a
+# conversion, and the standard library has no timezone. `clock` is the feature
+# that reads the local offset.
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }

@@ -28,6 +28,7 @@ pub struct FileRef { pub name: String, pub size: String }
 pub struct WireMessage {
     pub id: MessageId,
     pub from: Side,
+    /// 毫秒，Unix epoch。协议走 UTC，屏幕走本地。
     pub markdown: String,
     pub files: Vec<FileRef>,
     pub replies: Vec<String>,
@@ -43,7 +44,7 @@ pub enum UiMessage {
 pub enum CoreMessage {
     CoreAttachedSession { snapshot: Snapshot },
     MessageAppended { message: WireMessage },
-    MessageBegan { id: MessageId, from: Side },
+    MessageBegan { id: MessageId, sent: i64, from: Side },
     MessageStreamedText { id: MessageId, delta: String },
     MessageAttachedFile { id: MessageId, file: FileRef },
     MessageOfferedReplies { id: MessageId, replies: Vec<String> },
@@ -58,6 +59,11 @@ pub enum CoreMessage {
 2. **流式文本先合并再发。** core 侧按 16~33ms 合并 token，`MessageStreamedText` 一次带一段。UI 不做节流。
 3. **一条消息以 `MessageBegan` 开始、以 `MessageFinished` 结束。** 异常路径也必须发 `MessageFinished`，否则 UI 的"正在输入"会永久卡住。
 4. **`replies` 是文本。** 点一下等于替用户说那句话，core 收到的是 `UserSubmittedText`——它不需要知道你是打的还是点的。
+5. **时间是 UTC 毫秒，措辞是窗口的。** core 说"什么时候"，窗口决定写"今天 15:42"还是"周三 15:42"——后者要知道读者在哪个时区、今天是几号。这条边界和"core 决定说什么"是同一条：core 给事实，窗口给形式。
+
+## 协议里有时间
+
+`WireMessage.sent` 和 `MessageBegan.sent` 是唯一的时间字段，都是 Unix 毫秒（UTC）。窗口据此决定分隔线的位置（间隔 ≥5 分钟或跨天）和它的措辞。时间不进 agent 的上下文——它只在显示层存在。
 
 ## 协议里没有 task
 

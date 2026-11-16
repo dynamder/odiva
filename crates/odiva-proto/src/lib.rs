@@ -62,6 +62,12 @@ pub struct FileRef {
 pub struct WireMessage {
     pub id: MessageId,
     pub from: Side,
+    /// When it was said, in milliseconds since the Unix epoch.
+    ///
+    /// UTC on the wire, local on screen: the core says when, the window decides
+    /// how to write it. A label like "昨天 15:42" needs the reader's calendar,
+    /// which is the window's business and nobody else's.
+    pub sent: i64,
     pub markdown: String,
     pub files: Vec<FileRef>,
     /// Tappable replies offered by the sender. Pressing one is a message from
@@ -70,10 +76,16 @@ pub struct WireMessage {
 }
 
 impl WireMessage {
-    pub fn new(id: MessageId, from: Side, markdown: impl Into<String>) -> Self {
+    pub fn new(
+        id: MessageId,
+        sent: i64,
+        from: Side,
+        markdown: impl Into<String>,
+    ) -> Self {
         Self {
             id,
             from,
+            sent,
             markdown: markdown.into(),
             files: Vec::new(),
             replies: Vec::new(),
@@ -112,8 +124,13 @@ pub enum CoreMessage {
     /// back by the core, because the core owns the transcript.
     MessageAppended { message: WireMessage },
 
-    /// A message that is still being written.
-    MessageBegan { id: MessageId, from: Side },
+    /// A message that is still being written. It already has its time: the core
+    /// decides when a message exists, and that is when the person saw it start.
+    MessageBegan {
+        id: MessageId,
+        sent: i64,
+        from: Side,
+    },
     /// The next piece of it. The core coalesces tokens before sending; the
     /// window does not throttle.
     MessageStreamedText { id: MessageId, delta: String },

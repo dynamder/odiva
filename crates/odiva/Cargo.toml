@@ -10,6 +10,7 @@ publish.workspace = true
 ericed.workspace = true
 odiva-proto.workspace = true
 iced.workspace = true
+chrono.workspace = true
 
 [dev-dependencies]
 iced_test.workspace = true

@@ -3,9 +3,17 @@
 //! Everything here is about one property: **`App::apply` is the only door.** If a
 //! transcript can be built by anything other than `CoreMessage`s, the window has
 //! state of its own and the protocol is a decoration.
+//!
+//! The rest is the layout the window owns: how tall a transcript is, how much of
+//! it gets built, and whether new text is allowed to move the page under a
+//! reader's eyes.
 
-use odiva::{App, Message};
+use iced::Size;
+use odiva::{App, Message, model, time};
 use odiva_proto::{CoreMessage, FileRef, MessageId, Presence, Side, Snapshot, UiMessage, WireMessage};
+
+/// A viewport tall enough to be a window.
+const VIEWPORT: f32 = 600.0;
 
 fn attached(messages: Vec<WireMessage>, presence: Presence) -> CoreMessage {
     CoreMessage::CoreAttachedSession {
@@ -14,20 +22,22 @@ fn attached(messages: Vec<WireMessage>, presence: Presence) -> CoreMessage {
 }
 
 fn said(id: MessageId, from: Side, markdown: &str) -> WireMessage {
-    WireMessage::new(id, from, markdown)
+    WireMessage::new(id, 0, from, markdown)
+}
+
+fn window_with(messages: Vec<WireMessage>) -> App {
+    let mut app = App::empty();
+    let _ = app.apply(attached(messages, Presence::Online));
+    let _ = app.update(Message::TranscriptResized(Size::new(700.0, VIEWPORT)));
+    app
 }
 
 #[test]
 fn a_snapshot_is_enough_to_draw_the_whole_window() {
-    let mut app = App::empty();
-
-    app.apply(attached(
-        vec![
-            said(1, Side::User, "早上好"),
-            said(2, Side::Assistant, "早。今天要推哪几件事？"),
-        ],
-        Presence::Online,
-    ));
+    let app = window_with(vec![
+        said(1, Side::User, "早上好"),
+        said(2, Side::Assistant, "早。今天要推哪几件事？"),
+    ]);
 
     assert_eq!(app.messages().len(), 2);
     assert_eq!(app.messages()[0].from, Side::User);
@@ -39,17 +49,18 @@ fn a_snapshot_is_enough_to_draw_the_whole_window() {
 fn a_streamed_message_grows_until_it_is_finished() {
     let mut app = App::empty();
 
-    app.apply(CoreMessage::MessageBegan {
+    let _ = app.apply(CoreMessage::MessageBegan {
         id: 7,
+        sent: 0,
         from: Side::Assistant,
     });
     assert!(app.is_streaming());
 
-    app.apply(CoreMessage::MessageStreamedText {
+    let _ = app.apply(CoreMessage::MessageStreamedText {
         id: 7,
         delta: "# 结论\n\n握手超时是".to_owned(),
     });
-    app.apply(CoreMessage::MessageStreamedText {
+    let _ = app.apply(CoreMessage::MessageStreamedText {
         id: 7,
         delta: "因为 stderr 混进了协议流。".to_owned(),
     });
@@ -59,7 +70,7 @@ fn a_streamed_message_grows_until_it_is_finished() {
     // Parsed once per change, not once per frame: a heading and a paragraph.
     assert_eq!(msg.items.len(), 2);
 
-    app.apply(CoreMessage::MessageFinished { id: 7 });
+    let _ = app.apply(CoreMessage::MessageFinished { id: 7 });
     assert!(!app.is_streaming());
     assert!(!app.messages()[0].streaming);
 }
@@ -70,8 +81,8 @@ fn finishing_an_unknown_message_is_not_a_panic() {
 
     // A core that reports on a message the window never saw begun is a bug, not
     // a crash: the worst it may do is nothing.
-    app.apply(CoreMessage::MessageFinished { id: 99 });
-    app.apply(CoreMessage::MessageStreamedText {
+    let _ = app.apply(CoreMessage::MessageFinished { id: 99 });
+    let _ = app.apply(CoreMessage::MessageStreamedText {
         id: 99,
         delta: "orphan".to_owned(),
     });
@@ -84,26 +95,27 @@ fn finishing_an_unknown_message_is_not_a_panic() {
 fn files_and_replies_attach_to_the_message_they_belong_to() {
     let mut app = App::empty();
 
-    app.apply(CoreMessage::MessageBegan {
+    let _ = app.apply(CoreMessage::MessageBegan {
         id: 3,
+        sent: 0,
         from: Side::Assistant,
     });
-    app.apply(CoreMessage::MessageStreamedText {
+    let _ = app.apply(CoreMessage::MessageStreamedText {
         id: 3,
         delta: "计划写好了。".to_owned(),
     });
-    app.apply(CoreMessage::MessageAttachedFile {
+    let _ = app.apply(CoreMessage::MessageAttachedFile {
         id: 3,
         file: FileRef {
             name: "本周计划.md".to_owned(),
             size: "3.1 KB".to_owned(),
         },
     });
-    app.apply(CoreMessage::MessageOfferedReplies {
+    let _ = app.apply(CoreMessage::MessageOfferedReplies {
         id: 3,
         replies: vec!["好".to_owned()],
     });
-    app.apply(CoreMessage::MessageFinished { id: 3 });
+    let _ = app.apply(CoreMessage::MessageFinished { id: 3 });
 
     let msg = &app.messages()[0];
     assert_eq!(msg.files.len(), 1);
@@ -150,12 +162,10 @@ fn an_empty_draft_says_nothing() {
 
 #[test]
 fn a_re_attach_replaces_the_transcript() {
-    let mut app = App::empty();
-
-    app.apply(attached(vec![said(1, Side::User, "旧")], Presence::Online));
+    let mut app = window_with(vec![said(1, Side::User, "旧")]);
     assert_eq!(app.messages().len(), 1);
 
-    app.apply(attached(
+    let _ = app.apply(attached(
         vec![
             said(2, Side::Assistant, "新的一页"),
             said(3, Side::User, "好"),
@@ -166,4 +176,103 @@ fn a_re_attach_replaces_the_transcript() {
     assert_eq!(app.messages().len(), 2);
     assert_eq!(app.messages()[0].source, "新的一页");
     assert_eq!(app.presence(), Presence::Typing);
+}
+
+// ── The layout the window owns ──────────────────────────────────────────────
+
+#[test]
+fn a_long_transcript_builds_only_a_window_of_it() {
+    // 400 messages is a month of a chatty week, and building them all is the bug
+    // this test exists to catch.
+    let messages = (0..400u64)
+        .map(|slot| {
+            said(
+                slot + 1,
+                if slot % 2 == 0 {
+                    Side::User
+                } else {
+                    Side::Assistant
+                },
+                "一条消息，长度大约一行半，够让估算值和实测值不一样。",
+            )
+        })
+        .collect();
+
+    let app = window_with(messages);
+
+    let built = app.slice().len();
+    assert!(built < 40, "built {built} rows for a 400-message transcript");
+    assert!(app.total() > VIEWPORT, "the transcript should overflow");
+}
+
+#[test]
+fn a_short_transcript_sits_at_the_bottom() {
+    let app = window_with(vec![said(1, Side::User, "在吗")]);
+
+    // Nothing to scroll, so the window owes the conversation some air above it:
+    // that is what puts it on the composer instead of the top edge.
+    assert!(app.headroom() > 400.0, "headroom was {}", app.headroom());
+}
+
+#[test]
+fn a_measured_row_corrects_the_total() {
+    let mut app = window_with(vec![said(1, Side::User, "一"), said(2, Side::Assistant, "二")]);
+
+    let before = app.total();
+    let _ = app.update(Message::MessageMeasured {
+        slot: 0,
+        size: Size::new(700.0, 200.0),
+    });
+
+    assert!(app.total() > before, "measuring a tall row changes the total");
+}
+
+#[test]
+fn jumping_to_the_newest_follows_again() {
+    let mut app = window_with(vec![said(1, Side::User, "在吗")]);
+    app = app.following(false);
+
+    assert!(!app.is_pinned());
+
+    let _ = app.update(Message::UserJumpedToNewest);
+    assert!(app.is_pinned());
+}
+
+#[test]
+fn a_pause_opens_a_new_occasion() {
+    // Two messages a minute apart are one occasion; a message after an hour is
+    // another. The rule lives in `time`, and this is the seam that uses it.
+    assert!(time::needs_divider(None, 1_000_000));
+    assert!(!time::needs_divider(Some(1_000_000), 1_060_000));
+    assert!(time::needs_divider(Some(1_000_000), 4_600_000));
+}
+
+#[test]
+fn a_blocky_message_is_known_before_layout() {
+    let mut app = App::empty();
+    let _ = app.apply(CoreMessage::MessageAppended {
+        message: said(1, Side::Assistant, "```\nfn main() {}\n```"),
+    });
+
+    assert!(app.messages()[0].is_blocky());
+
+    // And a message that is only prose is not.
+    let mut app = App::empty();
+    let _ = app.apply(CoreMessage::MessageAppended {
+        message: said(2, Side::Assistant, "只是说话"),
+    });
+    assert!(!app.messages()[0].is_blocky());
+}
+
+#[test]
+fn a_message_knows_its_slot() {
+    let app = window_with(vec![
+        said(1, Side::User, "一"),
+        said(2, Side::Assistant, "二"),
+        said(3, Side::User, "三"),
+    ]);
+
+    let slots: Vec<_> = app.messages().iter().map(|msg| msg.slot).collect();
+    assert_eq!(slots, vec![0, 1, 2]);
+    let _: &model::Msg = &app.messages()[0];
 }

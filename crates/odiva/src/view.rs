@@ -1,8 +1,10 @@
 //! The window, drawn — as a conversation, not as a log.
 //!
 //! Three bands, top to bottom: the contact line, the transcript, the composer.
-//! The transcript is the only thing that scrolls, and it is the only thing that
-//! is a list.
+//! The transcript is the only thing that scrolls, and the only thing that is a
+//! list — and it is a *windowed* list: only the messages a viewport can see are
+//! built. A conversation is the one thing in this window that grows without
+//! bound, so it is the one thing that cannot be built whole.
 //!
 //! Two conventions worth stating because they are easy to undo by accident:
 //!
@@ -16,17 +18,15 @@
 //!   unfinished window, no matter how good the parts are.
 //!
 //! Consecutive messages from one side are a group: the gap inside a group is
-//! 3px, the gap between sides is 16px, and only the group's own corner is
-//! sharp. That is the whole of "who is speaking" — there is no label anywhere.
+//! 3px, the gap between sides is 16px, and only the group's own corner is sharp.
+//! That is the whole of "who is speaking" — there is no label anywhere.
 
 use iced::font::Weight;
 use iced::widget::{
-    button, column, container, markdown, row, rule, scrollable, space, text, text_input, Column,
-    Stack,
+    button, column, container, markdown, row, rule, scrollable, sensor, space, text, text_input,
+    Column, Stack,
 };
-use iced::{
-    Alignment, Background, Border, Color, Element, Font, Length, Padding, Theme,
-};
+use iced::{Alignment, Background, Border, Color, Element, Font, Length, Padding, Theme};
 
 use ericed::style::{StyleExt, Tokens};
 use odiva_proto::{FileRef, Presence, Side};
@@ -36,7 +36,7 @@ use crate::style::{
     block_gap, bubble_width, column_width, same_side_gap, side_gap, wide_bubble_width, Act, Line,
     Shape, Surface, Type,
 };
-use crate::{App, Message};
+use crate::{App, Message, SHEET, time};
 
 /// The whole window.
 pub fn window(app: &App) -> Element<'_, Message> {
@@ -98,39 +98,60 @@ fn transcript(app: &App) -> Element<'_, Message> {
     }
 
     let messages = app.messages();
-    let mut list = Column::new().spacing(0.0).width(Length::Fill);
-    list = list.push(time_divider());
+    let window = app.slice();
+    let now = app.now_ms();
 
-    for (index, msg) in messages.iter().enumerate() {
+    let mut items = Column::new().spacing(0.0).width(Length::Fill);
+
+    for slot in window.range() {
+        let msg = &messages[slot];
+
         // Where this message sits in its speaker's run. The gap is the group and
         // the corner is the group's own edge, so three sentences from one
         // speaker read as one breath instead of three remarks.
-        let same_before = index > 0 && messages[index - 1].from == msg.from;
-        let same_after = index + 1 < messages.len() && messages[index + 1].from == msg.from;
+        let same_before = slot > 0 && messages[slot - 1].from == msg.from;
+        let same_after = slot + 1 < messages.len() && messages[slot + 1].from == msg.from;
         let shape = Shape::of(same_before, same_after);
 
-        let gap = if same_before { same_side_gap() } else { side_gap() };
+        let previous = slot.checked_sub(1).map(|before| messages[before].sent);
+        let divider = time::needs_divider(previous, msg.sent).then(|| time::label(msg.sent, now));
 
-        list = list.push(
-            container(message_view(msg, shape, app.theme())).padding(Padding::ZERO.top(gap)),
+        let gap = if same_before {
+            same_side_gap()
+        } else {
+            side_gap()
+        };
+
+        let view = item_view(msg, shape, divider.as_deref(), gap, app.theme());
+
+        // The row reports its own height, which is the only way a windowed list
+        // can know where the next row starts.
+        items = items.push(
+            sensor(view).on_resize(move |size| Message::MessageMeasured { slot, size }),
         );
     }
 
-    let content = in_column(list.into());
+    // `headroom` is the bottom alignment: a conversation shorter than the window
+    // sits on the composer. It is zero whenever there is anything to scroll, so
+    // it can never fight the scroll offset.
+    let column_of_messages = column![
+        space::vertical().height(app.headroom()),
+        window.surround(items),
+    ]
+    .width(Length::Fill);
 
-    // Not bottom-anchored, and not for lack of trying: `Scrollable::anchor_bottom`
-    // only moves the scrollbar thumb, and a `Length::Fill` child inside a
-    // `Scrollable` is measured against an *infinite* height, so it resolves to
-    // zero and the whole transcript disappears. Bottom-anchoring needs the content
-    // height (a `sensor`) compared against the viewport, which is a real piece of
-    // work rather than a flag — and it only pays off once the transcript can also
-    // hold its position while streaming, i.e. with the `Pinned` policy.
-    let reading = scrollable(content)
+    let reading = scrollable(in_column(column_of_messages.into()))
+        .id(SHEET)
+        .on_scroll(Message::TranscriptScrolled)
         .height(Length::Fill)
         .width(Length::Fill);
 
+    // The viewport's height is needed *before* anything scrolls: it is what
+    // decides whether the transcript is short enough to sit at the bottom.
+    let fitted = sensor(reading).on_resize(Message::TranscriptResized);
+
     if app.is_pinned() {
-        return reading.into();
+        return fitted.into();
     }
 
     let jump = container(
@@ -145,7 +166,7 @@ fn transcript(app: &App) -> Element<'_, Message> {
     .align_y(Alignment::End)
     .padding(Padding::new(0.0).right(24.0).bottom(14.0));
 
-    Stack::new().push(reading).push(jump).into()
+    Stack::new().push(fitted).push(jump).into()
 }
 
 /// Nothing has been said yet.
@@ -170,36 +191,38 @@ fn empty<'a>() -> Element<'a, Message> {
         .into()
 }
 
-/// The time divider above the conversation.
-///
-/// A constant until the core starts telling the window about time — which it
-/// will have to, the moment the transcript can be scrolled back past today.
-fn time_divider<'a>() -> Element<'a, Message> {
-    let line = row![
-        space::horizontal(),
-        text("今天 15:42").styled(Type::Caption),
-        space::horizontal(),
-    ]
-    .width(Length::Fill);
+/// A message, with the time divider that belongs above it.
+fn item_view<'a>(
+    msg: &'a Msg,
+    shape: Shape,
+    divider: Option<&str>,
+    gap: f32,
+    theme: Theme,
+) -> Element<'a, Message> {
+    let mut stack = Column::new().spacing(0.0).width(Length::Fill);
 
-    container(in_column(line.into()))
-        .padding(Padding::new(4.0).bottom(10.0))
-        .into()
+    if let Some(label) = divider {
+        stack = stack.push(
+            container(
+                row![
+                    space::horizontal(),
+                    text(label.to_owned()).styled(Type::Caption),
+                    space::horizontal(),
+                ]
+                .width(Length::Fill),
+            )
+            .padding(Padding::new(6.0).bottom(9.0)),
+        );
+    }
+
+    stack = stack.push(message_view(msg, shape, theme));
+
+    container(stack).padding(Padding::ZERO.top(gap)).into()
 }
 
 /// One message: a bubble, on the side of whoever sent it.
 fn message_view<'a>(msg: &'a Msg, shape: Shape, theme: Theme) -> Element<'a, Message> {
-    // A message with a block-level item needs room: iced's markdown renders code
-    // blocks and tables at `Length::Fill`, and a `Fill` child of a `Shrink` bubble
-    // resolves to zero width — the bubble collapses around nothing. So the ones
-    // that carry a block get a filled, wider bubble, and prose stays ragged.
-    let blocky = msg.items.iter().any(|item| {
-        matches!(
-            item,
-            markdown::Item::CodeBlock { .. } | markdown::Item::Table { .. }
-        )
-    });
-
+    let blocky = msg.is_blocky();
     let mut body = Column::new().spacing(block_gap());
 
     if blocky {
