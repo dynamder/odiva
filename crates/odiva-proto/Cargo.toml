@@ -1,0 +1,12 @@
+[package]
+name = "odiva-proto"
+description = "The seam between the chat window and the core: messages, and nothing else."
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+# No dependencies, on purpose. This crate is the contract, and a contract that
+# can reach into `tokio` or `iced` is a contract that will eventually describe
+# one of them instead of the interface.
+[dependencies]

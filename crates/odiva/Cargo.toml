@@ -1,0 +1,16 @@
+[package]
+name = "odiva"
+description = "The chat window: a view of messages, and nothing else."
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+ericed.workspace = true
+odiva-proto.workspace = true
+iced.workspace = true
+
+[dev-dependencies]
+iced_test.workspace = true
+png.workspace = true
