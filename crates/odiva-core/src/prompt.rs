@@ -45,6 +45,4 @@ Speak the person's language.
 /// Not a rule, a reminder: "I forgot" and "I chose silence" look identical from
 /// outside, and only she can tell them apart.
 pub const AFTER_SILENCE: &str = "\
-You did not call `say`, so the person saw none of that. If they are waiting for \
-something, send it now. If silence was the right answer, send nothing again and the \
-turn ends.";
+You did not call `say`, so the person saw none of that. If silence is not your intent, call `say`.";
