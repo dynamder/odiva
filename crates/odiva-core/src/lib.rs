@@ -10,6 +10,7 @@ pub mod error;
 pub mod handoff;
 pub mod harness;
 pub mod ids;
+pub mod parked;
 pub mod prompt;
 pub mod roster;
 pub mod route;

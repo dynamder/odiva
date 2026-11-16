@@ -350,3 +350,68 @@ async fn a_task_in_flight_moves_the_conversation_to_a_work_lane() {
         "the handoff never reaches the public record"
     );
 }
+
+#[tokio::test]
+async fn asking_to_be_idle_moves_the_next_turn_off_the_work_lane() {
+    let store = scratch("engine-parked");
+    let route = Arc::new(Scripted::new(vec![
+        vec![
+            MockResponse::ToolCalls(vec![MockToolCall {
+                name: "task_dispatch".to_owned(),
+                arguments: json!({ "goal": "改 README" }),
+                provider_metadata: None,
+            }]),
+            done(),
+        ],
+        vec![
+            MockResponse::ToolCalls(vec![MockToolCall {
+                name: "request_idle".to_owned(),
+                arguments: json!({}),
+                provider_metadata: None,
+            }]),
+            done(),
+        ],
+        vec![saying("在。"), done()],
+    ]));
+
+    let (engine, handle, mut inbox) =
+        Engine::new(store.clone(), route, PROMPT, harness("slow")).expect("an engine");
+    tokio::spawn(engine.run());
+
+    handle.send(UiMessage::UserSubmittedText {
+        text: "把 README 改一下".to_owned(),
+    });
+    drain(&mut inbox, 3).await;
+
+    handle.send(UiMessage::UserSubmittedText {
+        text: "先停一下".to_owned(),
+    });
+    drain(&mut inbox, 4).await;
+
+    handle.send(UiMessage::UserSubmittedText {
+        text: "那你说说现在在干嘛".to_owned(),
+    });
+    drain(&mut inbox, 4).await;
+
+    let work = store
+        .read(Lane::Work { generation: 0 })
+        .expect("a work file")
+        .expect("a written work lane");
+
+    assert_eq!(
+        work.messages().len(),
+        2,
+        "only the parked turn wrote to the work lane"
+    );
+
+    let talk = store
+        .read(Lane::Talk { generation: 0 })
+        .expect("a talk file")
+        .expect("a written talk lane");
+
+    assert_eq!(
+        talk.messages().len(),
+        4,
+        "every line the person typed, and her answer"
+    );
+}

@@ -18,6 +18,7 @@ use crate::say::{Said, Say};
 use crate::store::{Lane, Store, TALK};
 use crate::talk::Talk;
 use crate::task::Origin;
+use crate::parked::{Parked, RequestIdle};
 use crate::tasks::{Nudge, Tasks, reading};
 use crate::tools;
 use crate::waiting::Waiting;
@@ -47,6 +48,8 @@ pub struct Engine {
     tasks: Arc<Tasks>,
     /// The busy period in progress, if any: a work lane's generation.
     work: Option<u32>,
+    /// Whether she asked to be idle until something happens.
+    parked: Parked,
 }
 
 impl Engine {
@@ -71,6 +74,7 @@ impl Engine {
             waiting: Waiting::default(),
             tasks,
             work: None,
+            parked: Parked::default(),
         };
 
         Ok((engine, Handle { out: handle }, messages))
@@ -144,6 +148,8 @@ impl Engine {
     /// Not a user message: it enters the model's context and nothing else, so
     /// the transcript stays a record of what was actually said.
     async fn notice(&mut self, id: &str, inbox: &mut UnboundedReceiver<UiMessage>) {
+        self.parked.wake();
+
         let Ok(task) = self.tasks.get(id) else {
             return;
         };
@@ -195,7 +201,7 @@ impl Engine {
                     generation,
                     &*self.route,
                     &self.prompt,
-                    self.roster(&said),
+                    self.roster(&said, true),
                     said,
                     jobs,
                 )?
@@ -204,7 +210,7 @@ impl Engine {
                 &self.store,
                 &*self.route,
                 &self.prompt,
-                self.roster(&said),
+                self.roster(&said, false),
                 said,
             )?,
         };
@@ -234,6 +240,10 @@ impl Engine {
 
     /// The work lane this busy period runs on, opening one if the period is new.
     fn work_generation(&mut self) -> Option<u32> {
+        if self.parked.is_parked() {
+            return None;
+        }
+
         if self.tasks.unfinished().is_empty() {
             self.work = None;
             return None;
@@ -256,7 +266,7 @@ impl Engine {
         Some(generation)
     }
 
-    fn roster(&self, said: &Said) -> Roster {
+    fn roster(&self, said: &Said, busy: bool) -> Roster {
         let mut tools = Vec::new();
 
         tools.push(Box::new(Say::new(
@@ -266,6 +276,10 @@ impl Engine {
         )) as Box<dyn yoagent::types::AgentTool>);
 
         tools.extend(tools::roster(&self.tasks, Origin::User));
+
+        if busy {
+            tools.push(Box::new(RequestIdle::new(self.parked.clone())));
+        }
 
         Roster::of(tools).sourcing(Arc::new(self.waiting.clone()))
     }

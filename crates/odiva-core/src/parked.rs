@@ -1,0 +1,76 @@
+//! Asking to be let out of a busy period.
+//!
+//! Busy is a fact — a task is unfinished — not a mode she chose. But sometimes
+//! what she needs is something only idle has, and the honest way there is to
+//! say so and stop, not to look for a back door.
+
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use async_trait::async_trait;
+use serde_json::{Value, json};
+use yoagent::types::{AgentTool, Content, ToolContext, ToolError, ToolResult};
+
+/// Whether she has asked to be idle until something happens.
+#[derive(Debug, Clone, Default)]
+pub struct Parked {
+    flag: Arc<AtomicBool>,
+}
+
+impl Parked {
+    pub fn park(&self) {
+        self.flag.store(true, Ordering::SeqCst);
+    }
+
+    /// Something happened: a worker moved, or the person spoke.
+    pub fn wake(&self) {
+        self.flag.store(false, Ordering::SeqCst);
+    }
+
+    pub fn is_parked(&self) -> bool {
+        self.flag.load(Ordering::SeqCst)
+    }
+}
+
+/// The tool that parks the busy period.
+pub struct RequestIdle {
+    parked: Parked,
+}
+
+impl RequestIdle {
+    pub fn new(parked: Parked) -> Self {
+        Self { parked }
+    }
+}
+
+#[async_trait]
+impl AgentTool for RequestIdle {
+    fn name(&self) -> &str {
+        "request_idle"
+    }
+
+    fn label(&self) -> &str {
+        "先停一下"
+    }
+
+    fn description(&self) -> &str {
+        "现在想回到空闲：这一轮就地结束。要等某个任务动了，才会回到忙。\
+         手上有没落地的副作用时不要调它。"
+    }
+
+    fn parameters_schema(&self) -> Value {
+        json!({ "type": "object", "properties": {} })
+    }
+
+    async fn execute(&self, _params: Value, ctx: ToolContext) -> Result<ToolResult, ToolError> {
+        self.parked.park();
+        ctx.cancel.cancel();
+
+        Ok(ToolResult {
+            content: vec![Content::Text {
+                text: "停一下。".to_owned(),
+            }],
+            details: Value::Null,
+        })
+    }
+}
