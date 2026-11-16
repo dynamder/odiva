@@ -2,7 +2,8 @@
 //!
 //! This crate is the *view* in front of `odiva-core`. It holds no truth about the
 //! conversation: every message on screen arrived through [`App::apply`], and
-//! everything the person does leaves through the outbox.
+//! everything the person does leaves through the [`CoreHandle`] it was connected
+//! to.
 //!
 //! It does hold *layout* state — measured row heights, the scroll offset, whether
 //! the view follows the newest message. That is what a window knows about its own
@@ -13,15 +14,18 @@ pub mod style;
 pub mod theme;
 pub mod time;
 pub mod view;
+mod wire;
 
 use chrono::Local;
 use ericed::list::{Measured, Scroll, Slice, Slots, measured};
 use iced::widget::{operation, scrollable};
-use iced::{Element, Size, Task as Command, Theme};
+use iced::{Element, Size, Subscription, Task as Command, Theme};
+use tokio::sync::mpsc::UnboundedReceiver;
 
-use odiva_proto::{CoreMessage, Presence, Snapshot, UiMessage};
+use odiva_proto::{CoreHandle, CoreMessage, Presence, Snapshot, UiMessage};
 
 use crate::style::column_width;
+use crate::wire::Wire;
 
 /// The transcript's scrollable, so a task can address it.
 pub const SHEET: &str = "odiva-transcript";
@@ -67,9 +71,9 @@ pub struct App {
     /// A pinned clock, for tests. `None` means "ask the system".
     clock: Option<i64>,
     pinned: bool,
-    /// What the window has said and no core has been given yet. A `Vec` because
-    /// there is no core in this crate yet; the running window drains it.
-    outbox: Vec<UiMessage>,
+    /// The core, when there is one. Both directions are optional so a fresh
+    /// window can be built for a screenshot or a protocol test.
+    wire: Wire,
 }
 
 impl App {
@@ -91,7 +95,7 @@ impl App {
             theme: theme::dark(),
             clock: None,
             pinned: true,
-            outbox: Vec::new(),
+            wire: Wire::default(),
         };
 
         for slot in 0..app.messages.len() {
@@ -104,6 +108,16 @@ impl App {
     /// An empty window, for a core that has nothing to say yet.
     pub fn empty() -> Self {
         Self::attached(Snapshot::default())
+    }
+
+    /// Connects the window to a core.
+    pub fn connected(
+        mut self,
+        handle: impl CoreHandle,
+        messages: UnboundedReceiver<CoreMessage>,
+    ) -> Self {
+        self.wire = Wire::connected(handle, messages);
+        self
     }
 
     /// Draws in another theme.
@@ -134,11 +148,17 @@ impl App {
         self
     }
 
+    fn with_wire(mut self, wire: Wire) -> Self {
+        self.wire = wire;
+        self
+    }
+
     /// The only door for the core.
     pub fn apply(&mut self, message: CoreMessage) -> Command<Message> {
         match message {
             CoreMessage::CoreAttachedSession { snapshot } => {
                 *self = Self::attached(snapshot)
+                    .with_wire(self.wire.clone())
                     .with_theme(self.theme.clone())
                     .with_clock(self.now_ms())
                     .with_viewport(self.scroll.height());
@@ -168,14 +188,14 @@ impl App {
                 let text = std::mem::take(&mut self.draft);
 
                 if !text.trim().is_empty() {
-                    self.outbox.push(UiMessage::UserSubmittedText { text });
+                    self.wire.send(UiMessage::UserSubmittedText { text });
                     self.pinned = true;
                     return self.follow();
                 }
             }
-            Message::UserRequestedStop => self.outbox.push(UiMessage::UserRequestedStop),
+            Message::UserRequestedStop => self.wire.send(UiMessage::UserRequestedStop),
             Message::UserTappedReply(text) => {
-                self.outbox.push(UiMessage::UserSubmittedText { text });
+                self.wire.send(UiMessage::UserSubmittedText { text });
                 self.pinned = true;
                 return self.follow();
             }
@@ -184,7 +204,7 @@ impl App {
                 return self.follow();
             }
             Message::UserOpenedLink(url) => {
-                self.outbox.push(UiMessage::UserSubmittedText { text: url });
+                self.wire.send(UiMessage::UserSubmittedText { text: url })
             }
             Message::CoreReported(message) => return self.apply(message),
 
@@ -209,9 +229,9 @@ impl App {
         Command::none()
     }
 
-    /// Takes what the window has said since the last call.
-    pub fn take_outbox(&mut self) -> Vec<UiMessage> {
-        std::mem::take(&mut self.outbox)
+    /// Everything the core reports, as it reports it.
+    pub fn subscription(&self) -> Subscription<Message> {
+        self.wire.subscription()
     }
 
     pub fn messages(&self) -> &[model::Msg] {

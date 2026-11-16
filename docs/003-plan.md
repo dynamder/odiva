@@ -15,7 +15,7 @@ M0 里就能验证最关键的假设：**任务状态在 core、会话可丢弃*
 | --- | --- |
 | `crates/ericed` | vendor 自 `../sofaia`，编译通过，示例自带断言 |
 | `crates/odiva-proto` | 三个变体 + `CoreHandle`，零依赖 |
-| `crates/odiva` | 聊天窗口：markdown、文件、快捷回复、时间分隔、虚拟化、贴底与跟随；跑在 fixtures 上 |
+| `crates/odiva` | 聊天窗口：markdown、文件、快捷回复、时间分隔、虚拟化、贴底与跟随；`CoreHandle` 出站、subscription 入站，接上 core |
 | `crates/odiva-core` | ACP 客户端、talk 线、引擎（presence/排队/中止）、任务台账与五个任务工具；假 harness 四个脚本 |
 
 窗口的验证方式有两个，都在 CI 里跑：
@@ -27,7 +27,7 @@ M0 里就能验证最关键的假设：**任务状态在 core、会话可丢弃*
 
 M0 的切片顺序和每个切片的产物写在 006 末节 —— 这里不重复，避免两份清单漂移。
 
-切片 1、2、3、5 已完成：假 harness、协议瘦身、`say` 与 talk 激活、任务台账。剩下的是切片 4（真模型）与切片 6（idle 三件事、水位线、预算，其中记忆的部分不在这一轮），以及 006 里还没落地的两件结构：busy/work 线的交接与自压缩、窗口接上 core。
+切片 1、2、3、5 已完成：假 harness、协议瘦身、`say` 与 talk 激活、任务台账；窗口也已接上 core（引擎由 `main` 起、`App::subscription` 收消息）。剩下的是切片 4（真模型）与切片 6（idle 三件事、水位线、预算，其中记忆的部分不在这一轮），以及 006 里还没落地的一件结构：busy/work 线的交接与自压缩。
 
 ## 阻塞（不是设计问题）
 

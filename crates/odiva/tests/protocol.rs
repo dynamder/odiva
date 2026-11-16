@@ -4,9 +4,13 @@
 //! can be built by anything other than `CoreMessage`s, the window has state of
 //! its own and the protocol is a decoration.
 
+use std::sync::{Arc, Mutex};
+
 use iced::Size;
 use odiva::{App, Message, model, time};
-use odiva_proto::{CoreMessage, FileRef, MessageId, Presence, Side, Snapshot, UiMessage, WireMessage};
+use odiva_proto::{
+    CoreHandle, CoreMessage, FileRef, MessageId, Presence, Side, Snapshot, UiMessage, WireMessage,
+};
 
 const VIEWPORT: f32 = 600.0;
 
@@ -18,6 +22,34 @@ fn attached(messages: Vec<WireMessage>, presence: Presence) -> CoreMessage {
 
 fn said(id: MessageId, from: Side, markdown: &str) -> WireMessage {
     WireMessage::new(id, 0, from, markdown)
+}
+
+#[derive(Clone, Default)]
+struct Recording {
+    sent: Arc<Mutex<Vec<UiMessage>>>,
+}
+
+impl Recording {
+    fn taken(&self) -> Vec<UiMessage> {
+        let mut sent = self.sent.lock().expect("no panic while recording");
+        std::mem::take(&mut *sent)
+    }
+}
+
+impl CoreHandle for Recording {
+    fn send(&self, message: UiMessage) {
+        self.sent
+            .lock()
+            .expect("no panic while recording")
+            .push(message);
+    }
+}
+
+fn connected_window() -> (App, Recording) {
+    let handle = Recording::default();
+    let (_core, messages) = tokio::sync::mpsc::unbounded_channel();
+
+    (App::empty().connected(handle.clone(), messages), handle)
 }
 
 fn window_with(messages: Vec<WireMessage>) -> App {
@@ -85,14 +117,14 @@ fn presence_is_the_cores_word() {
 
 #[test]
 fn typing_is_the_persons_word_and_tapping_a_reply_is_the_same_word() {
-    let mut app = App::empty();
+    let (mut app, handle) = connected_window();
 
     let _ = app.update(Message::UserChangedDraft("看下日志".to_owned()));
     let _ = app.update(Message::UserSubmittedDraft);
 
     assert_eq!(app.draft(), "");
     assert_eq!(
-        app.take_outbox(),
+        handle.taken(),
         vec![UiMessage::UserSubmittedText {
             text: "看下日志".to_owned()
         }]
@@ -101,7 +133,7 @@ fn typing_is_the_persons_word_and_tapping_a_reply_is_the_same_word() {
 
     let _ = app.update(Message::UserTappedReply("改吧".to_owned()));
     assert_eq!(
-        app.take_outbox(),
+        handle.taken(),
         vec![UiMessage::UserSubmittedText {
             text: "改吧".to_owned()
         }]
@@ -110,12 +142,12 @@ fn typing_is_the_persons_word_and_tapping_a_reply_is_the_same_word() {
 
 #[test]
 fn an_empty_draft_says_nothing() {
-    let mut app = App::empty();
+    let (mut app, handle) = connected_window();
 
     let _ = app.update(Message::UserChangedDraft("   ".to_owned()));
     let _ = app.update(Message::UserSubmittedDraft);
 
-    assert!(app.take_outbox().is_empty());
+    assert!(handle.taken().is_empty());
 }
 
 #[test]
@@ -224,4 +256,24 @@ fn a_message_knows_its_slot() {
     let slots: Vec<_> = app.messages().iter().map(|msg| msg.slot).collect();
     assert_eq!(slots, vec![0, 1, 2]);
     let _: &model::Msg = &app.messages()[0];
+}
+
+#[test]
+fn only_a_connected_window_subscribes_to_a_core() {
+    assert_eq!(App::empty().subscription().units(), 0);
+
+    let (app, _handle) = connected_window();
+    assert_eq!(app.subscription().units(), 1);
+}
+
+#[test]
+fn a_re_attach_keeps_the_wire() {
+    let (mut app, _handle) = connected_window();
+
+    let _ = app.apply(attached(
+        vec![said(1, Side::User, "新的一页")],
+        Presence::Online,
+    ));
+
+    assert_eq!(app.subscription().units(), 1);
 }

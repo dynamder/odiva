@@ -3027,8 +3027,11 @@ dependencies = [
  "ericed",
  "iced",
  "iced_test",
+ "odiva-core",
  "odiva-proto",
  "png",
+ "tokio",
+ "yoagent",
 ]
 
 [[package]]

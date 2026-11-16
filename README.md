@@ -33,8 +33,12 @@ crates/
 ```sh
 cargo test --workspace            # protocol, layout, and the ericed examples
 cargo test -p odiva --test render # rewrite target/ui-*.png for review
-cargo run -p odiva                # open the window (fixtures, no core yet)
+cargo run -p odiva                # open the window, connected to the core
 ```
+
+The window owns no conversation: `ODIVA_HOME` says where the core keeps its lanes
+(defaults to `./.odiva`), and `ODIVA_HARNESS` names the harness program it may
+start (defaults to `dsh`).
 
 The screenshots in `target/` are the design review loop: each one is a script of
 `CoreMessage`s replayed into a fresh window, so a picture that cannot be produced
@@ -42,16 +46,15 @@ means the protocol stopped being enough.
 
 ## State
 
-`crates/odiva` and `crates/odiva-proto` are real, and the window runs on
-fixtures. The protocol is down to three variants: a message either arrived whole
-or did not arrive.
+The window is connected to the core. `main` builds the engine and spawns it;
+`App::subscription` turns its `CoreMessage`s into `Message::CoreReported`, so the
+only thing that can change the transcript is still `App::apply`. The protocol is
+down to three variants: a message either arrived whole or did not arrive.
 
-`crates/odiva-core` has begun at the far end from the window: it starts a harness
-in a child process, shakes hands, asks it one thing, and gets the whole turn
-back. Permissions are refused, because nobody is watching a worker. What is
-missing is everything between: there is no agent of its own yet — no conversation,
-no lanes, no `say` — so the window still has nothing to talk to. The design is
-[006](docs/006-core.md).
+`crates/odiva-core` has the engine, the talk lane, `say`, and the task ledger. A
+turn still needs a harness on `PATH` and a model credential; without them the
+window opens and attaches, and a turn fails with a sentence on stderr. The design
+is [006](docs/006-core.md).
 
 Dependencies are fetched with escalation: the sandboxed toolchain cannot reach
 the TLS credential store, so `cargo add` and `cargo fetch` need it once. After

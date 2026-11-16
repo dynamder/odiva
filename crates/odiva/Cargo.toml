@@ -9,8 +9,11 @@ publish.workspace = true
 [dependencies]
 ericed.workspace = true
 odiva-proto.workspace = true
+odiva-core.workspace = true
 iced.workspace = true
 chrono.workspace = true
+tokio.workspace = true
+yoagent.workspace = true
 
 [dev-dependencies]
 iced_test.workspace = true
