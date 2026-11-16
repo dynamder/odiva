@@ -92,6 +92,29 @@ impl Worker {
         self
     }
 
+    /// The command to start, with a shell shim unwrapped.
+    ///
+    /// A package manager installs CLIs as `.cmd` on Windows, and the system's
+    /// process spawner will not run one directly; going through `cmd /C` is the
+    /// only way to start what the user configured.
+    fn program_command(&self) -> tokio::process::Command {
+        let shim = self
+            .program
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| {
+                extension.eq_ignore_ascii_case("cmd") || extension.eq_ignore_ascii_case("bat")
+            });
+
+        if !shim {
+            return tokio::process::Command::new(&self.program);
+        }
+
+        let mut command = tokio::process::Command::new("cmd");
+        command.arg("/C").arg(&self.program);
+        command
+    }
+
     /// Starts the harness, asks it one thing, and waits for it to stop talking.
     ///
     /// The child inherits this process's stderr, so a harness's own complaints
@@ -99,7 +122,8 @@ impl Worker {
     /// asks for is refused: nobody is watching a worker, so it must not be able
     /// to do something that needed a person.
     pub async fn talk(&self, prompt: &str) -> Result<Turn> {
-        let mut child = tokio::process::Command::new(&self.program)
+        let mut child = self
+            .program_command()
             .args(&self.args)
             .current_dir(&self.cwd)
             .envs(&self.env)

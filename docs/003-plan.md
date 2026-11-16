@@ -32,7 +32,8 @@ M0 的切片顺序和每个切片的产物写在 006 末节 —— 这里不重�
 ## 阻塞（不是设计问题）
 
 - 沙箱内进程拿不到 TLS（`SEC_E_NO_CREDENTIALS`）：`cargo add` / `cargo fetch` 要在提权下跑，之后依赖留在本地 registry，`--offline` 照常。
-- `dsh --profile acp` 首次启动要写 `~/.dsh/profiles/acp`。
+- `dsh --profile acp` 写 `$DSH_HOME/profiles/<name>`，而沙箱内 `~/.dsh` 不可写：跑真 harness 得把 `DSH_HOME` 指到工作区（`target/dsh-home` 已验证可用）。
+- 真模型还差一个模型凭据：隔离出来的 `DSH_HOME` 里没有 `.credentials.yaml`，prompt 会以 `no API key for provider route` 报错——这一条要人来给。
 
 ## 待定
 

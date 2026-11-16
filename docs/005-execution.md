@@ -62,6 +62,8 @@ core 只解析 `status`；缺信封按 `done` 处理并记诊断，永不因为�
 - 一个任务一个目录；改代码类任务用 `git worktree`，其余给独立空目录，打游戏这类可以什么都不给。
 - `prepare` 命令在第一次派活前跑一次（建 worktree、装依赖），有超时，失败就把任务判失败并记下输出。
 - 环境变量传给 harness：`ODIVA_TASK_DIR`、`ODIVA_TASK_ID`、`ODIVA_HARNESS`，以及 `DSH_HOME`（隔离 profile 与凭据）和 `DSH_PERMISSION_MODE`（按任务预设策略）。
+
+`DSH_HOME` 不是洁癖：默认的 `~/.dsh` 对沙箱内进程不可写，`dsh --profile acp` 会在 `mkdir profiles/<name>` 上直接 EPERM，连 `initialize` 都过不去。指到任务目录下就没事。另外 dsh 的 spill store 要在 `%TEMP%` 建临时目录，拿不到只警告一条、继续跑。
 - **`cwd` 就是沙箱边界。** dsh 的 `workspaceRoot` 取的是进程的 cwd，写边界外会作为权限请求上行 —— 这条不是我们实现的，是拿来的。
 - 这是**默认值，不是安全边界**——worker 跑在同一个用户下，能按绝对路径执行任何东西。真正拦住它的是 harness 自己的沙箱。
 
