@@ -209,3 +209,54 @@ async fn a_busy_activation_writes_two_lanes() {
 
     assert_eq!(shown(&mut inbox).len(), 1);
 }
+
+#[tokio::test]
+async fn a_lane_that_outgrew_itself_rotates_and_keeps_the_tail() {
+    let store = scratch("talk-compaction");
+
+    let mut log = odiva_core::store::Log::new(PROMPT);
+
+    for index in 0..10u64 {
+        let side = if index % 2 == 0 {
+            Side::User
+        } else {
+            Side::Assistant
+        };
+
+        log.push(odiva_proto::WireMessage::new(
+            index + 1,
+            0,
+            side,
+            format!("第 {index} 条"),
+        ));
+    }
+
+    store
+        .write(Lane::Talk { generation: 0 }, &log)
+        .expect("a written lane");
+
+    let (out, _inbox, ids) = window();
+    let said = Said::default();
+    let route = Scripted::one(vec![]);
+
+    let mut talk =
+        Talk::open(&store, &route, PROMPT, tools(out, &ids, &said), said.clone()).expect("a lane");
+
+    talk.compact(6).expect("a rotation");
+
+    let rotated = store
+        .read(Lane::Talk { generation: 1 })
+        .expect("a rotated file")
+        .expect("a written rotation");
+
+    assert_eq!(rotated.messages().len(), 7, "a residue and six messages");
+    assert!(rotated.messages()[0].markdown.contains("【压缩】"));
+    assert_eq!(rotated.messages()[1].markdown, "第 4 条");
+
+    let original = store
+        .read(Lane::Talk { generation: 0 })
+        .expect("the old file")
+        .expect("kept");
+
+    assert_eq!(original.messages().len(), 10, "rotation never deletes");
+}

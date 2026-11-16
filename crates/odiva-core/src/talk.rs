@@ -143,6 +143,76 @@ impl Talk {
 
         self.store.write(self.lane, &self.log)
     }
+
+    /// How big this lane's context was, in the provider's own count.
+    pub fn used(&self) -> u64 {
+        let usage = self.agent.total_usage();
+        usage.input + usage.cache_read + usage.cache_write + usage.output
+    }
+
+    /// Rotates the talking lane when it has outgrown itself.
+    ///
+    /// The old file stays where it is; the new one starts with a residue and the
+    /// last few exchanges, so what follows is a conversation that remembers what
+    /// it was about and nothing else. Work lanes are one period each and are not
+    /// rotated under themselves.
+    pub fn compact(&mut self, keep: usize) -> Result<()> {
+        let Lane::Talk { generation } = self.lane else {
+            return Ok(());
+        };
+
+        let next = Lane::Talk {
+            generation: generation + 1,
+        };
+
+        let mut log = Log::new(self.log.system());
+        log.push_note(Side::User, residue(self.log.messages(), keep));
+
+        for message in tail(self.log.messages(), keep) {
+            log.push(message.clone());
+        }
+
+        self.store.write(next, &log)?;
+        self.lane = next;
+        self.log = log;
+
+        Ok(())
+    }
+}
+
+/// The last `keep` messages, oldest first.
+fn tail(messages: &[WireMessage], keep: usize) -> &[WireMessage] {
+    let start = messages.len().saturating_sub(keep);
+    &messages[start..]
+}
+
+/// A few lines about what came before — the shape of a summary, not a summary.
+fn residue(messages: &[WireMessage], keep: usize) -> String {
+    let start = messages.len().saturating_sub(keep);
+    let dropped = &messages[..start];
+
+    if dropped.is_empty() {
+        return "【压缩】前面没有落下什么。".to_owned();
+    }
+
+    let mut text = format!("【压缩】前面 {} 条的大意：\n", dropped.len());
+
+    for message in dropped.iter().rev().take(4).rev() {
+        let line = message
+            .markdown
+            .lines()
+            .find(|line| !line.trim().is_empty())
+            .unwrap_or("");
+
+        let side = match message.from {
+            Side::User => "对方",
+            Side::Assistant => "你",
+        };
+
+        text.push_str(&format!("- {side}：{}\n", line.chars().take(80).collect::<String>()));
+    }
+
+    text
 }
 
 fn assemble(route: &dyn Route, prompt: &str, roster: Roster, log: &Log) -> Agent {

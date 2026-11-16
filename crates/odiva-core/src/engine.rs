@@ -23,6 +23,15 @@ use crate::tasks::{Nudge, Tasks, reading};
 use crate::tools;
 use crate::waiting::Waiting;
 
+/// The context window compaction is measured against.
+const CONTEXT_WINDOW: u64 = 128_000;
+
+/// Where in the window a lane rotates.
+const COMPACT_AT: u64 = 60;
+
+/// How many messages survive a rotation.
+const KEEP: usize = 6;
+
 /// The window's end of the wire.
 #[derive(Debug, Clone)]
 pub struct Handle {
@@ -235,7 +244,13 @@ impl Engine {
         }
 
         drop(running);
-        talk.flush()
+        talk.flush()?;
+
+        if talk.used() * 100 >= CONTEXT_WINDOW * COMPACT_AT {
+            talk.compact(KEEP)?;
+        }
+
+        Ok(())
     }
 
     /// The work lane this busy period runs on, opening one if the period is new.

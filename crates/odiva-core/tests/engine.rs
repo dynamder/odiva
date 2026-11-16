@@ -415,3 +415,29 @@ async fn asking_to_be_idle_moves_the_next_turn_off_the_work_lane() {
         "every line the person typed, and her answer"
     );
 }
+
+#[tokio::test]
+async fn a_turn_that_fills_the_window_rotates_the_lane() {
+    let store = scratch("engine-compaction");
+    let usage = Usage {
+        input: 90_000,
+        output: 1_000,
+        ..Usage::default()
+    };
+
+    let (handle, mut inbox) = scripted(
+        vec![vec![MockResponse::TextWithUsage("好。".to_owned(), usage)]],
+        &store,
+    );
+
+    handle.send(UiMessage::UserSubmittedText {
+        text: "说句话".to_owned(),
+    });
+    drain(&mut inbox, 3).await;
+
+    assert!(
+        store.path(Lane::Talk { generation: 1 }).exists(),
+        "a lane past the threshold starts the next generation"
+    );
+    assert!(store.path(Lane::Talk { generation: 0 }).exists());
+}
