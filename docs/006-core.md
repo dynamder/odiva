@@ -182,7 +182,7 @@ JSON 而不是 TOML：这是 core 自己读写的文件，不是给人手改的�
 ## M0 切片
 
 1. 假 ACP harness + SDK 客户端（已完成）：spawn → initialize → session/new → prompt → 收 update → end_turn。
-2. 协议瘦身（已完成）：三变体 + 窗口删流式路径，截图重跑。
+2. 协议瘦身（已完成）：窗口删流式路径，截图重跑。
 3. `say` + talk 激活接真 yoagent（已完成）：`MockProvider` 脚本跑通"一句话进、一条消息出"。
 4. `dsh --profile acp` 接上真模型，跑通 M0 验收。
 5. 任务台账 + 两种等待 + `task_dispatch`（已完成）：台账在 `tasks/<id>.json`，五个工具，报告信封，槽 3 个。

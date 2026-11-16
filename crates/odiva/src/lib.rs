@@ -74,6 +74,8 @@ pub struct App {
     /// The core, when there is one. Both directions are optional so a fresh
     /// window can be built for a screenshot or a protocol test.
     wire: Wire,
+    /// The last failure, shown until the next attempt.
+    notice: Option<String>,
 }
 
 impl App {
@@ -96,6 +98,7 @@ impl App {
             clock: None,
             pinned: true,
             wire: Wire::default(),
+            notice: None,
         };
 
         for slot in 0..app.messages.len() {
@@ -172,6 +175,7 @@ impl App {
                 self.estimate(slot);
             }
             CoreMessage::PresenceChanged { presence } => self.presence = presence,
+            CoreMessage::CoreFailed { note } => self.notice = Some(note),
         }
 
         if self.pinned {
@@ -189,6 +193,7 @@ impl App {
 
                 if !text.trim().is_empty() {
                     self.wire.send(UiMessage::UserSubmittedText { text });
+                    self.notice = None;
                     self.pinned = true;
                     return self.follow();
                 }
@@ -196,6 +201,7 @@ impl App {
             Message::UserRequestedStop => self.wire.send(UiMessage::UserRequestedStop),
             Message::UserTappedReply(text) => {
                 self.wire.send(UiMessage::UserSubmittedText { text });
+                self.notice = None;
                 self.pinned = true;
                 return self.follow();
             }
@@ -253,12 +259,6 @@ impl App {
         self.scroll
     }
 
-    /// How much empty space to put above the transcript so a short conversation
-    /// sits on the composer.
-    pub fn headroom(&self) -> f32 {
-        (self.scroll.height() - self.total()).max(0.0)
-    }
-
     pub fn draft(&self) -> &str {
         &self.draft
     }
@@ -269,6 +269,11 @@ impl App {
 
     pub fn is_pinned(&self) -> bool {
         self.pinned
+    }
+
+    /// The last thing that failed, until the next attempt replaces it.
+    pub fn notice(&self) -> Option<&str> {
+        self.notice.as_deref()
     }
 
     /// Whether she is working on something, which is what the contact line and

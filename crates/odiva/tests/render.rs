@@ -83,6 +83,17 @@ fn working() -> Vec<CoreMessage> {
     script
 }
 
+/// The same conversation, with the last turn having failed.
+fn failed() -> Vec<CoreMessage> {
+    let mut script = chat();
+
+    script.push(CoreMessage::CoreFailed {
+        note: "这一轮没跑完：no API key for provider route \"deepseek\"".to_owned(),
+    });
+
+    script
+}
+
 /// Six jobs at once, said in two messages: the count lives in the agent's
 /// sentence and a list, not in six bubbles or a widget that knows what a task is.
 fn busy() -> Vec<CoreMessage> {
@@ -156,6 +167,7 @@ enum Fixture {
     Empty,
     Chat,
     Working,
+    Failed,
     Busy,
     Long,
 }
@@ -166,6 +178,7 @@ impl Fixture {
             Self::Empty => Vec::new(),
             Self::Chat => chat(),
             Self::Working => working(),
+            Self::Failed => failed(),
             Self::Busy => busy(),
             Self::Long => long(),
         }
@@ -253,6 +266,7 @@ fn render_screenshots() {
         ("chat-empty", Fixture::Empty, true, false),
         ("chat", Fixture::Chat, true, false),
         ("chat-working", Fixture::Working, true, false),
+        ("chat-failed", Fixture::Failed, true, false),
         ("chat-busy", Fixture::Busy, true, false),
         ("chat-long", Fixture::Long, false, false),
         ("chat-light", Fixture::Chat, true, true),

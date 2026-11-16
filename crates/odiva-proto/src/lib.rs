@@ -108,6 +108,12 @@ pub enum CoreMessage {
     /// Whether the contact line reads "typing": the agent is working on
     /// something. Independent of messages, which arrive on their own schedule.
     PresenceChanged { presence: Presence },
+    /// Something went wrong, and the window is the only place that can say so.
+    ///
+    /// Speech is her choice, so a failure has no messenger otherwise: the core
+    /// reports it here and the window shows it as a notice, never as something
+    /// she said.
+    CoreFailed { note: String },
 }
 
 /// The window's way out. A trait rather than a channel, so a script in tests and

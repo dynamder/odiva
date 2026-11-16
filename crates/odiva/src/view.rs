@@ -113,11 +113,7 @@ fn transcript(app: &App) -> Element<'_, Message> {
         );
     }
 
-    let column_of_messages = column![
-        space::vertical().height(app.headroom()),
-        window.surround(items),
-    ]
-    .width(Length::Fill);
+    let column_of_messages = column![window.surround(items)].width(Length::Fill);
 
     let reading = scrollable(in_column(column_of_messages.into()))
         .id(SHEET)
@@ -315,8 +311,11 @@ fn file_view(file: &FileRef) -> Element<'_, Message> {
     .into()
 }
 
-/// The input, and the one button that matters: the send button becomes the stop
-/// control while she is working on something.
+/// The input, the one button that matters, and whatever failed last.
+///
+/// The send button becomes the stop control while she is working on something;
+/// a failure sits above the input until the next attempt, because a window that
+/// swallowed an error would be lying about the conversation.
 fn composer(app: &App) -> Element<'_, Message> {
     let input = text_input("发消息…", app.draft())
         .on_input(Message::UserChangedDraft)
@@ -340,7 +339,15 @@ fn composer(app: &App) -> Element<'_, Message> {
 
     let line = row![input, action].spacing(8).align_y(Alignment::Center);
 
-    container(in_column(line.into()))
+    let mut band = Column::new().spacing(7).width(Length::Fill);
+
+    if let Some(note) = app.notice() {
+        band = band.push(text(note.to_owned()).styled(Type::Error).width(Length::Fill));
+    }
+
+    band = band.push(line);
+
+    container(in_column(band.into()))
         .styled(Surface::Footer)
         .into()
 }

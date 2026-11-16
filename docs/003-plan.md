@@ -14,7 +14,7 @@ M0 里就能验证最关键的假设：**任务状态在 core、会话可丢弃*
 | | 状态 |
 | --- | --- |
 | `crates/ericed` | vendor 自 `../sofaia`，编译通过，示例自带断言 |
-| `crates/odiva-proto` | 三个变体 + `CoreHandle`，零依赖 |
+| `crates/odiva-proto` | 四个变体 + `CoreHandle`，零依赖 |
 | `crates/odiva` | 聊天窗口：markdown、文件、快捷回复、时间分隔、虚拟化、贴底与跟随；`CoreHandle` 出站、subscription 入站，接上 core |
 | `crates/odiva-core` | ACP 客户端、talk 线、引擎（presence/排队/中止）、任务台账与五个任务工具；假 harness 四个脚本 |
 

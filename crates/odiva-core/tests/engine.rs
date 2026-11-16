@@ -441,3 +441,44 @@ async fn a_turn_that_fills_the_window_rotates_the_lane() {
     );
     assert!(store.path(Lane::Talk { generation: 0 }).exists());
 }
+
+#[tokio::test]
+async fn a_task_that_dies_is_never_silent() {
+    let store = scratch("engine-task-failure");
+    let route = Arc::new(Scripted::new(vec![
+        vec![
+            MockResponse::ToolCalls(vec![MockToolCall {
+                name: "task_dispatch".to_owned(),
+                arguments: json!({ "goal": "跑一个会死的活" }),
+                provider_metadata: None,
+            }]),
+            done(),
+        ],
+        vec![done()],
+    ]));
+
+    let (engine, handle, mut inbox) =
+        Engine::new(store, route, PROMPT, harness("crash")).expect("an engine");
+    tokio::spawn(engine.run());
+
+    handle.send(UiMessage::UserSubmittedText {
+        text: "去试试".to_owned(),
+    });
+
+    let mut notice = None;
+
+    for _ in 0..12 {
+        let message = tokio::time::timeout(Duration::from_secs(10), inbox.recv())
+            .await
+            .expect("the engine kept talking")
+            .expect("the engine is alive");
+
+        if let CoreMessage::CoreFailed { note } = message {
+            notice = Some(note);
+            break;
+        }
+    }
+
+    let note = notice.expect("a dead worker reaches the window, not just the log");
+    assert!(note.contains("t1"), "the notice names the task: {note}");
+}

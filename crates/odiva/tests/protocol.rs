@@ -192,10 +192,19 @@ fn a_long_transcript_builds_only_a_window_of_it() {
 }
 
 #[test]
-fn a_short_transcript_sits_at_the_bottom() {
-    let app = window_with(vec![said(1, Side::User, "在吗")]);
+fn a_failure_is_shown_until_the_next_attempt() {
+    let mut app = App::empty();
 
-    assert!(app.headroom() > 400.0, "headroom was {}", app.headroom());
+    let _ = app.apply(CoreMessage::CoreFailed {
+        note: "这一轮没跑完：没有 key".to_owned(),
+    });
+
+    assert_eq!(app.notice(), Some("这一轮没跑完：没有 key"));
+
+    let _ = app.update(Message::UserChangedDraft("再来".to_owned()));
+    let _ = app.update(Message::UserSubmittedDraft);
+
+    assert_eq!(app.notice(), None, "trying again clears the last failure");
 }
 
 #[test]

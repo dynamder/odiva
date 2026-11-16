@@ -163,6 +163,12 @@ impl Engine {
             return;
         };
 
+        if let crate::task::Status::Failed(reason) = &task.status {
+            self.emit(CoreMessage::CoreFailed {
+                note: format!("{} 失败了：{reason}", task.id),
+            });
+        }
+
         let text = format!(
             "（后台的变化，不是对方说的）\n\n{}\n\n要不要说、说什么，你决定。",
             reading(&task)
@@ -184,7 +190,10 @@ impl Engine {
         self.presence(Presence::Online);
 
         if let Err(error) = outcome {
-            eprintln!("odiva: a turn failed: {error}");
+            let note = format!("这一轮没跑完：{error}");
+
+            self.emit(CoreMessage::CoreFailed { note: note.clone() });
+            eprintln!("odiva: {note}");
         }
     }
 
