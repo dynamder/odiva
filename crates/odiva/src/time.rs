@@ -1,23 +1,13 @@
 //! Time labels.
 //!
-//! The protocol carries when a message was said, in UTC milliseconds. Writing
-//! that down for a person needs *their* calendar: is it today, was it yesterday,
-//! was it last Tuesday. That conversion is the window's job — the core says when,
-//! not how to phrase it.
-//!
-//! Two rules, both from how messengers behave:
-//!
-//! * a divider appears at the start of the conversation, after a pause long
-//!   enough that the next message is a new occasion, and across midnight;
-//! * the label says the most recent thing that is still true — the clock for
-//!   today, the day for this week, the date after that.
+//! The protocol carries UTC milliseconds; writing that down for a person needs
+//! *their* calendar. The core says when, the window says how to phrase it: a
+//! divider at the start of the conversation, after a long enough pause, and
+//! across midnight; a label naming the most recent thing that is still true.
 
 use chrono::{DateTime, Datelike, Local, TimeZone, Timelike, Weekday};
 
-/// How long a silence has to be before the conversation is considered resumed.
-///
-/// Five minutes: short enough that a real pause gets marked, long enough that
-/// answering in two breaths does not put a label between them.
+/// How long a silence has to be before the conversation counts as resumed.
 const PAUSE_MS: i64 = 5 * 60 * 1000;
 
 /// Whether a divider belongs above a message sent at `sent`.

@@ -1,48 +1,22 @@
 //! A window into a list: only the slots a viewport can see.
 //!
-//! iced gives you a `scrollable` that reports its [`Viewport`], and nothing that
-//! turns a viewport into *which slots to build*. That gap is the whole of this
-//! module.
-//!
-//! # What each piece is for
-//!
-//! | type | the problem it solves |
-//! | --- | --- |
-//! | [`Scroll`] | iced only ever hands you a [`Viewport`] as a *message*; `view` needs those numbers *now*, so they are kept as state |
-//! | [`Slice`] | "which slots this frame, and how much padding above and below" — four numbers from one piece of arithmetic |
-//! | [`Slots`] | the windowing itself (`slice` / `reveal` / `anchor`), written once for both kinds of height |
-//! | [`Fixed`] | heights are a constant, so there is no measurement and no feedback loop |
-//! | [`Measured`] | heights arrive later from a `sensor`, so they are a cache over estimates |
-//!
-//! # The invariant
+//! iced hands a `scrollable`'s [`Viewport`] over as a message and nothing that
+//! turns it into *which slots to build*; this module is that gap.
 //!
 //! ```text
 //! scrollable.content_bounds().height() == slots.total()
 //! ```
 //!
-//! Every absolute offset in iced is clamped against the content height, so if
-//! the two disagree the scrollbar is right and everything else is quietly
-//! wrong: `scroll_to` lands somewhere else, and the window drifts one row
-//! further off with every notch.
+//! If the two disagree, every absolute offset is clamped against the wrong
+//! number and the list drifts one row per notch. The invariant is a property of
+//! the types: a [`Slice`] can only come from a [`Slots`], and its padding can
+//! only be produced by [`Slice::surround`], so both spacers come from the same
+//! arithmetic as the range they surround.
 //!
-//! The only way to build the padding is [`Slice::surround`], and the only way
-//! to get a [`Slice`] is from a [`Slots`]. Both spacers therefore come from the
-//! same arithmetic as the range they surround, and the invariant is a property
-//! of the types instead of a comment.
-//!
-//! # Why the app holds the offset
-//!
-//! `scrollable` keeps its offset private and only tells you about it through
-//! `on_scroll` — a message, delivered after the frame that scrolled. So a
-//! windowed list keeps the numbers itself ([`Scroll`]) and passes them while
-//! building.
-//!
-//! That copy has one trap, and it is not obvious: `scrollable::scroll_to` sets
-//! the widget's offset **without** notifying `on_scroll` (`scrollable::State`'s
-//! `scroll_to` only stores the value). After a programmatic scroll, an app that
-//! only listens would render the old window forever. That is why [`Scroll::to`]
-//! exists: it records the offset *and* returns the payload
-//! `operation::scroll_to` takes, so the two can only move together.
+//! The application has to keep the offset itself ([`Scroll`]): `scrollable`
+//! reports it only through `on_scroll`, and `scroll_to` does not fire
+//! `on_scroll`, which is why [`Scroll::to`] records the offset and returns the
+//! payload together.
 
 use std::ops::Range;
 
@@ -51,18 +25,8 @@ use iced_widget::Column;
 use iced_widget::scrollable::{AbsoluteOffset, Viewport};
 use iced_widget::space;
 
-/// The stored counterpart of a [`Viewport`].
-///
-/// A [`Viewport`] is a snapshot handed to `on_scroll`; this is the same two
-/// numbers kept as state, because `view` needs them *now* and the message
-/// arrives later.
-///
-/// Two writers, both named after where the news came from:
-///
-/// * [`Scroll::update`] — from `on_scroll` (a wheel turn, a drag, a touch).
-/// * [`Scroll::resized`] — from a `sensor`, because `on_scroll` does not fire
-///   until something actually scrolls, and `reveal` needs the height before
-///   that.
+/// The stored counterpart of a [`Viewport`]: the same two numbers, kept as state
+/// because `view` needs them now and the message arrives later.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct Scroll {
     y: f32,
@@ -78,7 +42,7 @@ impl Scroll {
         }
     }
 
-    /// A scroll at a known position, mostly for tests and for restoring state.
+    /// A scroll at a known position, for tests and for restoring state.
     pub const fn at(y: f32, height: f32) -> Self {
         Self { y, height }
     }
@@ -102,8 +66,7 @@ impl Scroll {
     /// The height of the viewport, without touching the offset.
     ///
     /// For a `sensor` that reports its own size: the height is known from the
-    /// first frame, the offset is not, and overwriting one with the other would
-    /// throw away a scroll that has already happened.
+    /// first frame, the offset is not.
     pub fn resized(&mut self, height: f32) {
         self.height = height.max(0.0);
     }
@@ -111,10 +74,9 @@ impl Scroll {
     /// Records a programmatic scroll and returns the payload to hand to
     /// `iced::widget::operation::scroll_to`.
     ///
-    /// Call it in the same `update` that starts the task. Doing the two
-    /// separately is how a windowed list ends up drawing one window while the
-    /// scrollbar shows another — iced will not tell you, because `scroll_to`
-    /// does not run `on_scroll`.
+    /// Call it in the same `update` that starts the task: `scroll_to` does not
+    /// run `on_scroll`, so doing the two separately leaves the list drawing one
+    /// window while the scrollbar shows another.
     pub fn to(&mut self, y: f32) -> AbsoluteOffset<Option<f32>> {
         self.y = y.max(0.0);
 
@@ -158,9 +120,6 @@ impl Slice {
     }
 
     /// The height that belongs below them.
-    ///
-    /// Derived from the same total as [`Slice::before`], which is why the two
-    /// cannot disagree with the range between them.
     pub fn after(&self) -> f32 {
         self.after
     }
@@ -172,9 +131,8 @@ impl Slice {
 
     /// Wraps the built slots in exactly the padding this slice needs.
     ///
-    /// The spacing is zero on purpose: a [`Column`] adds its spacing *between
-    /// every pair*, so a spacing here would add two more gaps that no one
-    /// counted, and the content would grow by `2 * spacing` on every rebuild.
+    /// The spacing is zero on purpose: a `Column` adds its spacing between every
+    /// pair, which would grow the content by `2 * spacing` on every rebuild.
     pub fn surround<'a, Message, Theme, Renderer>(
         &self,
         content: impl Into<Element<'a, Message, Theme, Renderer>>,
@@ -196,10 +154,8 @@ impl Slice {
 
 /// A list whose slots can be indexed, measured and placed.
 ///
-/// Two implementations, and one difference that matters: [`Fixed`] knows every
-/// height up front, [`Measured`] learns them. Everything here is written in
-/// terms of `top`/`height`, so the windowing, the reveal and the anchor are
-/// shared.
+/// [`Fixed`] knows every height up front, [`Measured`] learns them; everything
+/// here is written in terms of `top`/`height`, so both share it.
 pub trait Slots {
     /// How many slots there are.
     fn len(&self) -> usize;
@@ -233,9 +189,9 @@ pub trait Slots {
 
     /// The offset that moves a slot into view with the least scrolling.
     ///
-    /// Returns the current offset when the slot is already visible, and the
-    /// current offset when the viewport height is still unknown — guessing
-    /// there would jump the list to its end on the first frame.
+    /// Returns the current offset when the slot is already visible, and when the
+    /// viewport height is still unknown — guessing there would jump the list to
+    /// its end on the first frame.
     fn reveal(&self, slot: usize, scroll: &Scroll) -> f32 {
         if scroll.height() <= 0.0 || self.is_empty() {
             return scroll.y();
@@ -261,10 +217,9 @@ pub trait Slots {
 
     /// The offset that puts `slot`'s top `dy` pixels below the viewport's top.
     ///
-    /// This is the anchor form, for keeping a reader's place when content is
-    /// inserted above them: record `(slot, dy)` before the change, ask for the
-    /// same pair afterwards with `slot` shifted by however many slots appeared
-    /// before it.
+    /// For keeping a reader's place when content is inserted above them: record
+    /// `(slot, dy)` before the change, and ask for the same pair afterwards with
+    /// `slot` shifted by however many slots appeared before it.
     fn anchor(&self, slot: usize, dy: f32, scroll: &Scroll) -> f32 {
         if self.is_empty() {
             return 0.0;
@@ -276,15 +231,8 @@ pub trait Slots {
     }
 }
 
-/// The offset itself, clamped into the content.
-///
-/// Shared by both implementations, because "the window may not start past the
-/// end" is the same rule for both — and forgetting it is how a windowed list
-/// shows a blank page after the window grows.
 fn clamp_offset(y: f32, height: f32, max_scroll: f32) -> f32 {
     if height <= 0.0 {
-        // The viewport has not been measured yet: take the offset at its word
-        // rather than clamping it against a zero-height window.
         y.max(0.0)
     } else {
         y.clamp(0.0, max_scroll)
@@ -301,12 +249,10 @@ fn empty_slice(total: f32) -> Slice {
     }
 }
 
-/// A list of slots that all have the same height.
+/// A list of slots that all have the same height. Build one with [`fixed`].
 ///
 /// No measurement, so no feedback loop and no drift: the scrollbar, the reveal
 /// arithmetic and the content height are exact from the first frame.
-///
-/// Build one with [`fixed`].
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Fixed {
     row: f32,
@@ -316,9 +262,8 @@ pub struct Fixed {
 
 /// A list of `len` slots, each `row` pixels tall.
 ///
-/// `row` is the height of every slot, and the same number the row's own
-/// `Length::Fixed` must use — the two are the invariant, so they should come
-/// from one function.
+/// `row` is also the `Length::Fixed` the row itself must use; the two are the
+/// invariant, so both should come from one function.
 pub fn fixed(row: impl Into<Pixels>, len: usize) -> Fixed {
     Fixed {
         row: row.into().0.max(0.0),
@@ -389,39 +334,34 @@ impl Slots for Fixed {
     }
 }
 
-/// A list of slots whose heights are discovered by laying them out.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum SlotHeight {
+    Estimated,
+    Measured(f32),
+}
+
+/// A list of slots whose heights are discovered by laying them out. Build one
+/// with [`measured`].
 ///
-/// Every slot starts at `estimate` and is corrected by [`Measured::measure`],
-/// which is what a `sensor` reports once the slot has been rendered. That makes
-/// the heights a *cache* rather than a fact, and three rules keep the cache
-/// from fighting the layout:
+/// Every slot starts at `estimate`; [`Measured::measure`] corrects one from a
+/// `sensor`, so the heights are a cache rather than a fact. Three rules keep the
+/// cache from fighting the layout:
 ///
-/// 1. **Measuring never changes a slot that is already measured.** Unknown
-///    slots move; known ones do not, so the table converges instead of
-///    oscillating between frames.
-/// 2. **The window is positioned by the prefix sum as it stands.** Unmeasured
-///    slots are estimates, so the scrollbar is approximate there — that is the
-///    price, and correcting it by re-laying-out is how you get the oscillation
-///    back.
-/// 3. **A measurement is only valid at one width.** A `sensor` reports the size
-///    it was laid out at, and text re-wraps when that changes, so
-///    [`Measured::measure`] takes the whole [`Size`] and invalidates the table
-///    itself when the width moves. Nobody has to remember that on resize.
-///
-/// Build one with [`measured`].
+/// 1. Measuring never changes a slot that is already measured, so the table
+///    converges instead of oscillating between frames.
+/// 2. The window is positioned by the prefix sum as it stands. Unmeasured slots
+///    are estimates, so the scrollbar is approximate there.
+/// 3. A measurement is only valid at one width. [`Measured::measure`] takes the
+///    whole [`Size`] and invalidates the table when the width moves, because a
+///    re-wrap changes every height.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Measured {
     len: usize,
     overscan: usize,
     estimate: f32,
-    heights: Vec<f32>,
-    measured: Vec<bool>,
-    /// The width the heights were measured at, once anything has been measured.
+    heights: Vec<SlotHeight>,
     width: Option<f32>,
-    /// `prefix[i]` is the top of slot `i`; one longer than `heights`.
     prefix: Vec<f32>,
-    /// The lowest index whose prefix may be stale; past `len` means "clean".
-    dirty: usize,
 }
 
 /// A list of `len` slots, each assumed to be `estimate` pixels tall until a
@@ -433,11 +373,9 @@ pub fn measured(estimate: impl Into<Pixels>, len: usize) -> Measured {
         len,
         overscan: 0,
         estimate,
-        heights: vec![estimate; len],
-        measured: vec![false; len],
+        heights: vec![SlotHeight::Estimated; len],
         width: None,
         prefix: (0..=len).map(|i| estimate * i as f32).collect(),
-        dirty: len + 1,
     }
 }
 
@@ -450,12 +388,15 @@ impl Measured {
 
     /// What a slot claims to be: measured if known, estimated if not.
     pub fn height_of(&self, slot: usize) -> f32 {
-        self.heights.get(slot).copied().unwrap_or(self.estimate)
+        match self.heights.get(slot) {
+            Some(SlotHeight::Measured(height)) => *height,
+            _ => self.estimate,
+        }
     }
 
     /// Whether a slot has been measured at the current width.
     pub fn is_measured(&self, slot: usize) -> bool {
-        self.measured.get(slot).copied().unwrap_or(false)
+        matches!(self.heights.get(slot), Some(SlotHeight::Measured(_)))
     }
 
     /// The width every measurement so far was taken at.
@@ -467,86 +408,67 @@ impl Measured {
     ///
     /// Returns whether the content height changed — the app needs that to know
     /// whether the anchor it is holding still means anything.
-    ///
-    /// A different width from the last measurement invalidates every height
-    /// first, because a re-wrap changes all of them, not just this one.
     pub fn measure(&mut self, slot: usize, size: Size) -> bool {
         if slot >= self.len {
             return false;
         }
 
         let width = size.width.round();
+        let reflowed = self.width.is_some_and(|known| known.round() != width);
 
-        if self.width.is_some_and(|known| known.round() != width) {
-            self.heights.fill(self.estimate);
-            self.measured.fill(false);
-            self.dirty = 0;
+        if reflowed {
+            self.heights.fill(SlotHeight::Estimated);
         }
 
         self.width = Some(size.width);
 
         let total_before = self.total();
 
-        self.heights[slot] = size.height.max(0.0);
-        self.measured[slot] = true;
-        self.dirty = self.dirty.min(slot);
-        self.rebuild_prefix();
+        self.heights[slot] = SlotHeight::Measured(size.height.max(0.0));
+        self.rebuild_prefix(if reflowed { 0 } else { slot });
 
         self.total() != total_before
     }
 
-    /// Inserts `slots` unmeasured slots at the front.
-    ///
-    /// For loading older items above what is already shown: the app shifts any
-    /// anchor it holds by the same count, and then asks [`Slots::anchor`] for
-    /// the offset that keeps the reader in place.
+    /// Appends a slot at the estimate. `measure` corrects it once it lays out.
+    pub fn push(&mut self) {
+        let end = self.prefix[self.len] + self.estimate;
+
+        self.len += 1;
+        self.heights.push(SlotHeight::Estimated);
+        self.prefix.push(end);
+    }
+
+    /// Inserts `slots` unmeasured slots at the front, for loading older items
+    /// above what is shown. The app shifts any anchor it holds by the same count
+    /// and then asks [`Slots::anchor`] for the offset that keeps the reader in
+    /// place.
     ///
     /// A block grid only survives this if the number of inserted slots is a
-    /// multiple of the block size — otherwise every block boundary moves, and
-    /// every measurement with it.
+    /// multiple of the block size — otherwise every block boundary moves.
     pub fn prepend(&mut self, slots: usize) {
         if slots == 0 {
             return;
         }
 
         self.len += slots;
-        self.heights = core::iter::repeat_n(self.estimate, slots)
+        self.heights = core::iter::repeat_n(SlotHeight::Estimated, slots)
             .chain(self.heights.drain(..))
             .collect();
-        self.measured = core::iter::repeat_n(false, slots)
-            .chain(self.measured.drain(..))
-            .collect();
 
-        // The old prefix sum is shifted by `slots * estimate`, but the measured
-        // slots keep their heights, so it has to be rebuilt rather than
-        // re-filled with the estimate.
         self.prefix.clear();
         self.prefix.push(0.0);
 
         for i in 0..self.len {
-            self.prefix.push(self.prefix[i] + self.heights[i]);
+            let next = self.prefix[i] + self.height_of(i);
+            self.prefix.push(next);
         }
-
-        self.dirty = self.len + 1;
     }
 
-    /// Recomputes the prefix sum from the lowest stale index.
-    ///
-    /// Measuring is O(1) plus this, and this is O(n) in the worst case (a
-    /// measurement near the front). In practice measurements arrive for the
-    /// slots that are visible, and a batch of them costs one pass — but if a
-    /// profile ever points here, this is the line to replace with a Fenwick
-    /// tree.
-    fn rebuild_prefix(&mut self) {
-        if self.dirty > self.len {
-            return;
+    fn rebuild_prefix(&mut self, from: usize) {
+        for i in from.max(1)..=self.len {
+            self.prefix[i] = self.prefix[i - 1] + self.height_of(i - 1);
         }
-
-        for i in self.dirty.max(1)..=self.len {
-            self.prefix[i] = self.prefix[i - 1] + self.heights[i - 1];
-        }
-
-        self.dirty = self.len + 1;
     }
 
     /// The slot that owns the pixel at `y`.
@@ -636,7 +558,6 @@ mod tests {
         let path = fixed(ROW, 100);
         let slice = path.slice_at(240.0, 480.0);
 
-        // 240/24 = slot 10, 480/24 = 20 rows, plus one for the partial one.
         assert_eq!(slice.range(), 10..31);
         assert_eq!(slice.before(), 240.0);
         assert_eq!(slice.total(), 2400.0);
@@ -659,8 +580,6 @@ mod tests {
         let path = fixed(ROW, 100);
         let slice = path.slice_at(100_000.0, 480.0);
 
-        // Clamped to the last screenful: the window never starts past the end
-        // and never goes blank.
         assert_eq!(slice.range().end, 100);
         assert_eq!(slice.after(), 0.0);
         assert_eq!(
@@ -673,7 +592,6 @@ mod tests {
     fn an_offset_past_the_end_is_clamped_rather_than_blank() {
         let path = fixed(ROW, 10);
 
-        // A window that grew leaves the kept offset past the content.
         let slice = path.slice_at(10_000.0, 480.0);
 
         assert!(!slice.is_empty());
@@ -696,11 +614,8 @@ mod tests {
         let path = fixed(ROW, 100);
         let scroll = Scroll::at(240.0, 480.0);
 
-        // Already visible: no movement.
         assert_eq!(path.reveal(15, &scroll), 240.0);
-        // Above the viewport: scroll up to its top.
         assert_eq!(path.reveal(3, &scroll), 72.0);
-        // Below: put its bottom on the viewport's bottom.
         assert_eq!(path.reveal(40, &scroll), 41.0 * ROW - 480.0);
     }
 
@@ -709,7 +624,6 @@ mod tests {
         let path = fixed(ROW, 100);
         let scroll = Scroll::at(240.0, 0.0);
 
-        // Not 0.0, and not the end of the list: nothing moves.
         assert_eq!(path.reveal(90, &scroll), 240.0);
     }
 
@@ -718,7 +632,6 @@ mod tests {
         let path = fixed(ROW, 100);
         let scroll = Scroll::at(240.0, 480.0);
 
-        // Slot 20 is at 480; asking for it 10px down asks for offset 470.
         assert_eq!(path.anchor(20, 10.0, &scroll), 470.0);
         assert_eq!(path.anchor(0, 10.0, &scroll), 0.0);
         assert_eq!(path.anchor(99, 0.0, &scroll), 2400.0 - 480.0);
@@ -745,7 +658,6 @@ mod tests {
         assert_eq!(path.total(), 10.0 * 40.0 + 60.0);
         assert_eq!(path.width(), Some(600.0));
 
-        // The same measurement again changes nothing.
         assert!(!path.measure(2, Size::new(600.0, 100.0)));
         assert_eq!(path.total(), 460.0);
     }
@@ -756,8 +668,6 @@ mod tests {
         path.measure(1, Size::new(600.0, 100.0));
         assert_eq!(path.height_of(1), 100.0);
 
-        // A rebuilt layout at a new width re-wraps every slot, so every
-        // measurement is suspect — including the one being reported now.
         path.measure(2, Size::new(400.0, 70.0));
 
         assert_eq!(path.height_of(1), 40.0);
@@ -776,7 +686,6 @@ mod tests {
         assert_eq!(path.slot_at(40.0), 1);
         assert_eq!(path.slot_at(139.0), 1);
         assert_eq!(path.slot_at(140.0), 2);
-        // Past the end clamps to the last slot.
         assert_eq!(path.slot_at(10_000.0), 4);
     }
 
@@ -796,6 +705,21 @@ mod tests {
     }
 
     #[test]
+    fn push_appends_at_the_estimate() {
+        let mut path = measured(40.0, 2);
+        path.measure(0, Size::new(600.0, 100.0));
+
+        path.push();
+
+        assert_eq!(path.len(), 3);
+        assert_eq!(path.total(), 100.0 + 40.0 + 40.0);
+        assert_eq!(path.top(2), 140.0);
+        assert_eq!(path.height_of(2), 40.0);
+        assert!(!path.is_measured(2));
+        assert_eq!(path.slice_at(0.0, 80.0).total(), path.total());
+    }
+
+    #[test]
     fn prepend_shifts_measurements_and_keeps_the_shapes_valid() {
         let mut path = measured(40.0, 4);
         path.measure(0, Size::new(600.0, 100.0));
@@ -807,7 +731,6 @@ mod tests {
         assert_eq!(path.total(), 6.0 * 40.0 + 60.0);
         assert_eq!(path.top(0), 0.0);
         assert!(!path.is_measured(0));
-        // The slot that was measured is still the same slot, two places later.
         assert!(path.is_measured(2));
         assert_eq!(path.height_of(2), 100.0);
         assert_eq!(path.top(3), 2.0 * 40.0 + 100.0);

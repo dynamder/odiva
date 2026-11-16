@@ -1,20 +1,9 @@
-//! The wheel's sign convention, written down once — and the area that claims it.
+//! The wheel's sign convention, and an area that claims the wheel.
 //!
 //! iced has `mouse_area` for clicks and nothing for the wheel: a `Scrollable`
-//! under the pointer simply takes the wheel and scrolls itself, which is what
-//! you want for a document and not what you want for a keyboard-driven list.
-//!
-//! [`WheelArea`] is the missing counterpart. It claims the wheel over its own
-//! bounds, turns it into a [`WheelDirection`] and hands it to the application,
-//! so a list can decide that a notch means *one row* without the application
-//! having to match on `mouse::Event::WheelScrolled` itself — and without the
-//! silent surprise of that match going quiet the moment a `Scrollable` is in
-//! the tree.
-//!
-//! It claims the wheel by capturing the event, which is enough to stop a
-//! `Scrollable` below it: `scrollable` returns early when the event has already
-//! been captured. Nothing else is touched — presses still reach the scrollbar,
-//! so dragging it keeps working, and so do touch gestures.
+//! under the pointer simply takes it. [`WheelArea`] claims the wheel over its own
+//! bounds and reports a [`WheelDirection`], which a keyboard-driven list can read
+//! as "one row" without matching on `mouse::Event::WheelScrolled` itself.
 
 use iced_core::layout;
 use iced_core::mouse::{self, ScrollDelta};
@@ -26,11 +15,8 @@ use iced_core::{Clipboard, Element, Event, Layout, Length, Rectangle, Shell, Siz
 
 /// Which way a wheel turned.
 ///
-/// Only the sign survives. iced reports a magnitude — `Lines { y: 3.0 }` for a
-/// mouse notch, pixels for a trackpad — and the intent this eventually produces
-/// is "one row", which has no magnitude to carry it. What *is* worth writing
-/// down is the sign: iced treats a **positive `y`** as the wheel being pushed
-/// away from the user, which is why `Scrollable` scrolls by `-delta`.
+/// iced treats a **positive `y`** as the wheel pushed away from the user, which
+/// is why `Scrollable` scrolls by `-delta`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum WheelDirection {
     Up,
@@ -38,10 +24,8 @@ pub enum WheelDirection {
 }
 
 impl WheelDirection {
-    /// Reads the direction out of a raw scroll delta.
-    ///
-    /// Returns [`None`] when the wheel reported no vertical motion at all
-    /// (a horizontal-only trackpad gesture, for instance).
+    /// Reads the direction out of a raw scroll delta. [`None`] when the wheel
+    /// reported no vertical motion at all.
     pub fn read(delta: ScrollDelta) -> Option<Self> {
         let y = match delta {
             ScrollDelta::Lines { y, .. } | ScrollDelta::Pixels { y, .. } => y,
@@ -57,9 +41,8 @@ impl WheelDirection {
     }
 }
 
-/// An area that claims the wheel and reports where it turned.
-///
-/// Build one with [`wheel_area`].
+/// An area that claims the wheel and reports where it turned. Build one with
+/// [`wheel_area`].
 pub struct WheelArea<'a, Message, Theme = iced_widget::Theme, Renderer = iced_widget::Renderer>
 where
     Renderer: iced_core::Renderer,
@@ -70,10 +53,9 @@ where
 
 /// Claims the wheel over `content`, publishing a message for each turn.
 ///
-/// The handler is a constructor argument rather than a chained method on
-/// purpose: a `wheel_area` that captures the wheel with no handler would make
-/// everything below it dead to the wheel — a silent failure, and the kind that
-/// takes an afternoon to find.
+/// The handler is a constructor argument rather than a chained method: a
+/// `wheel_area` with no handler would make everything below it silently dead to
+/// the wheel.
 ///
 /// ```no_run
 /// # #[derive(Clone)]
@@ -169,8 +151,6 @@ where
             && let Some(direction) = WheelDirection::read(*delta)
         {
             shell.publish((self.on_wheel)(direction));
-            // Claiming it is the whole point: a `Scrollable` below sees the
-            // captured status and leaves the event alone.
             shell.capture_event();
 
             return;

@@ -1,28 +1,17 @@
 //! The seam between the chat window and the core.
 //!
-//! One rule decides everything in this crate: **the window knows about messages
-//! and nothing else.** There is no task here, no status, no progress, no
-//! harness, no tool call. Those exist inside the core; what crosses this seam is
-//! what the agent chose to *say*, after it decided to say it.
+//! Only messages cross it: no task, no status, no progress, no harness, no tool
+//! call. Those live in the core; what arrives here is what the agent decided to
+//! say, after deciding to say it.
 //!
-//! That is what keeps the window from turning into a component of the harness.
-//! The moment a `Task` appears in this file, the interface has opinions about
-//! workflow, and it is a trace viewer with rounded corners.
-//!
-//! # Naming
-//!
-//! Both directions are enums whose variants read as a sentence — subject, verb,
-//! object, none omitted — because a variant called `Turn(..)` cannot tell a
-//! reader whether the turn started or ended. The type name carries the direction
-//! ([`UiMessage`] is what the person did, [`CoreMessage`] is what happened); the
-//! variant says what, in words.
+//! Variants read as a sentence — subject, verb, object — because a variant named
+//! `Turn(..)` cannot tell a reader whether the turn started or ended. The type
+//! carries the direction ([`UiMessage`] is what the person did, [`CoreMessage`]
+//! is what happened).
 
 #![forbid(unsafe_code)]
 
-/// Identifies one message for the life of a session.
-///
-/// Monotonic per core, not per side: an id is handed out when the core decides
-/// the message exists, which is always before the window hears of it.
+/// Identifies one message. Handed out by the core, monotonic per core.
 pub type MessageId = u64;
 
 /// Who a message came from.
@@ -32,10 +21,7 @@ pub enum Side {
     Assistant,
 }
 
-/// What the contact line says.
-///
-/// Two states, because a messenger has two. Anything more would be the interface
-/// claiming to know what she is doing, which it does not.
+/// What the contact line says. A messenger has two states, so this has two.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum Presence {
     Typing,
@@ -43,10 +29,8 @@ pub enum Presence {
     Online,
 }
 
-/// A file attached to a message.
-///
-/// Deliberately inert: a name and a size, which is what a messenger shows. Where
-/// the bytes live is the core's business.
+/// A file attached to a message: the name and size a messenger shows. Where the
+/// bytes live is the core's business.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct FileRef {
     pub name: String,
@@ -55,23 +39,18 @@ pub struct FileRef {
 
 /// One message.
 ///
-/// The body is markdown, not a structured block array. Which means "what a
-/// message can contain" is exactly "what a chat application can contain" — and
-/// the renderer's job is to read markdown, not to interpret an agent protocol.
+/// The body is markdown rather than a block array, so "what a message can
+/// contain" is exactly "what a chat application can contain".
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WireMessage {
     pub id: MessageId,
     pub from: Side,
-    /// When it was said, in milliseconds since the Unix epoch.
-    ///
-    /// UTC on the wire, local on screen: the core says when, the window decides
-    /// how to write it. A label like "昨天 15:42" needs the reader's calendar,
-    /// which is the window's business and nobody else's.
+    /// Milliseconds since the Unix epoch, UTC. Formatting for the reader is the
+    /// window's job.
     pub sent: i64,
     pub markdown: String,
     pub files: Vec<FileRef>,
-    /// Tappable replies offered by the sender. Pressing one is a message from
-    /// the person; see [`UiMessage::UserSubmittedText`].
+    /// Tappable replies. Pressing one is [`UiMessage::UserSubmittedText`].
     pub replies: Vec<String>,
 }
 
@@ -95,9 +74,8 @@ impl WireMessage {
 
 /// Everything the window needs to draw itself from nothing.
 ///
-/// The single rebuild entry point. A window that has just started, or has just
-/// been reopened, is correct after one `CoreAttachedSession` and needs no other
-/// mechanism — which is only true because the window holds no state of its own.
+/// The single rebuild entry point: after one `CoreAttachedSession` the window is
+/// correct, because it holds no state of its own.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Snapshot {
     pub messages: Vec<WireMessage>,
@@ -117,36 +95,30 @@ pub enum UiMessage {
 /// breaks its build instead of falling into a `_` arm.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CoreMessage {
-    /// The window may start drawing. Always the first message of a connection.
+    /// Always the first message of a connection.
     CoreAttachedSession { snapshot: Snapshot },
-
-    /// A complete message. Carries both sides: the person's own line is echoed
-    /// back by the core, because the core owns the transcript.
+    /// A complete message. The person's own line is echoed back here, because
+    /// the core owns the transcript.
     MessageAppended { message: WireMessage },
-
-    /// A message that is still being written. It already has its time: the core
-    /// decides when a message exists, and that is when the person saw it start.
+    /// A message that is still being written. It already carries its time.
     MessageBegan {
         id: MessageId,
         sent: i64,
         from: Side,
     },
-    /// The next piece of it. The core coalesces tokens before sending; the
-    /// window does not throttle.
+    /// The next piece of it. The core coalesces tokens; the window does not
+    /// throttle.
     MessageStreamedText { id: MessageId, delta: String },
     MessageAttachedFile { id: MessageId, file: FileRef },
     MessageOfferedReplies { id: MessageId, replies: Vec<String> },
-    /// The end of it. Sent on every path, including failure, or the window's
+    /// The end of it, sent on every path including failure, or the window's
     /// "typing…" never stops.
     MessageFinished { id: MessageId },
-
     PresenceChanged { presence: Presence },
 }
 
-/// The window's way out.
-///
-/// A trait, not a channel, so the window can be driven by a script in tests and
-/// by a socket later without either of them being a special case.
+/// The window's way out. A trait rather than a channel, so a script in tests and
+/// a socket later are not special cases.
 pub trait CoreHandle: Send + Sync + 'static {
     fn send(&self, message: UiMessage);
 }

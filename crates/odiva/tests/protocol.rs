@@ -1,18 +1,13 @@
 //! The seam, exercised without a window.
 //!
-//! Everything here is about one property: **`App::apply` is the only door.** If a
-//! transcript can be built by anything other than `CoreMessage`s, the window has
-//! state of its own and the protocol is a decoration.
-//!
-//! The rest is the layout the window owns: how tall a transcript is, how much of
-//! it gets built, and whether new text is allowed to move the page under a
-//! reader's eyes.
+//! One property decides the rest: `App::apply` is the only door. If a transcript
+//! can be built by anything other than `CoreMessage`s, the window has state of
+//! its own and the protocol is a decoration.
 
 use iced::Size;
 use odiva::{App, Message, model, time};
 use odiva_proto::{CoreMessage, FileRef, MessageId, Presence, Side, Snapshot, UiMessage, WireMessage};
 
-/// A viewport tall enough to be a window.
 const VIEWPORT: f32 = 600.0;
 
 fn attached(messages: Vec<WireMessage>, presence: Presence) -> CoreMessage {
@@ -67,7 +62,6 @@ fn a_streamed_message_grows_until_it_is_finished() {
 
     let msg = &app.messages()[0];
     assert_eq!(msg.source, "# 结论\n\n握手超时是因为 stderr 混进了协议流。");
-    // Parsed once per change, not once per frame: a heading and a paragraph.
     assert_eq!(msg.items.len(), 2);
 
     let _ = app.apply(CoreMessage::MessageFinished { id: 7 });
@@ -79,8 +73,6 @@ fn a_streamed_message_grows_until_it_is_finished() {
 fn finishing_an_unknown_message_is_not_a_panic() {
     let mut app = App::empty();
 
-    // A core that reports on a message the window never saw begun is a bug, not
-    // a crash: the worst it may do is nothing.
     let _ = app.apply(CoreMessage::MessageFinished { id: 99 });
     let _ = app.apply(CoreMessage::MessageStreamedText {
         id: 99,
@@ -136,9 +128,6 @@ fn typing_is_the_persons_word_and_tapping_a_reply_is_the_same_word() {
             text: "看下日志".to_owned()
         }]
     );
-
-    // The window does not add the line to the transcript: the core echoes it
-    // back as a `MessageAppended`, so there is one place where a message is born.
     assert!(app.messages().is_empty());
 
     let _ = app.update(Message::UserTappedReply("改吧".to_owned()));
@@ -178,12 +167,8 @@ fn a_re_attach_replaces_the_transcript() {
     assert_eq!(app.presence(), Presence::Typing);
 }
 
-// ── The layout the window owns ──────────────────────────────────────────────
-
 #[test]
 fn a_long_transcript_builds_only_a_window_of_it() {
-    // 400 messages is a month of a chatty week, and building them all is the bug
-    // this test exists to catch.
     let messages = (0..400u64)
         .map(|slot| {
             said(
@@ -209,8 +194,6 @@ fn a_long_transcript_builds_only_a_window_of_it() {
 fn a_short_transcript_sits_at_the_bottom() {
     let app = window_with(vec![said(1, Side::User, "在吗")]);
 
-    // Nothing to scroll, so the window owes the conversation some air above it:
-    // that is what puts it on the composer instead of the top edge.
     assert!(app.headroom() > 400.0, "headroom was {}", app.headroom());
 }
 
@@ -240,8 +223,6 @@ fn jumping_to_the_newest_follows_again() {
 
 #[test]
 fn a_pause_opens_a_new_occasion() {
-    // Two messages a minute apart are one occasion; a message after an hour is
-    // another. The rule lives in `time`, and this is the seam that uses it.
     assert!(time::needs_divider(None, 1_000_000));
     assert!(!time::needs_divider(Some(1_000_000), 1_060_000));
     assert!(time::needs_divider(Some(1_000_000), 4_600_000));
@@ -256,7 +237,6 @@ fn a_blocky_message_is_known_before_layout() {
 
     assert!(app.messages()[0].is_blocky());
 
-    // And a message that is only prose is not.
     let mut app = App::empty();
     let _ = app.apply(CoreMessage::MessageAppended {
         message: said(2, Side::Assistant, "只是说话"),

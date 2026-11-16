@@ -1,19 +1,8 @@
 //! The palette every recipe reads.
 //!
-//! Recipes never touch raw colours: they ask for a *role* (`text_muted`,
-//! `surface_hover`, `danger_text`) and get a value that already agrees with the
-//! rest of the application in every theme. Adding a role here is cheap; adding
-//! a `Color::from_rgb(..)` in a recipe is how themes start to rot.
-//!
-//! # A palette is a point, not a bag of colours
-//!
-//! Because every recipe reads the same struct, the whole visual language can be
-//! moved at once between two palettes — a hover cross-fade, a theme transition —
-//! and that is what [`Interpolable`] is for. It is iced's trait, not one of this
-//! crate's: it is what `Animation::interpolate_with` asks for, so a `Tokens` can
-//! be driven by iced's animation as readily as by
-//! [`motion::Track`](crate::motion::Track), and the straight line between two
-//! palettes is a line both of them walk.
+//! Recipes ask for a role, never for a raw colour, so every recipe agrees with
+//! the rest of the application in every theme. All recipes read the same struct,
+//! so a whole visual language can be moved at once by [`Tokens::mix`].
 
 use iced_core::animation::Interpolable;
 use iced_core::theme::palette;
@@ -65,8 +54,6 @@ impl Tokens {
             danger_text: palette::readable(canvas, extended.danger.base.color),
             info_text: palette::readable(canvas, extended.secondary.base.color),
             warning_text: palette::readable(canvas, extended.warning.base.color),
-            // A scrim is the only role that is deliberately translucent: it *is*
-            // a dimming layer, so it has to be.
             scrim: Color {
                 a: 0.45,
                 ..Color::BLACK
@@ -74,23 +61,18 @@ impl Tokens {
         }
     }
 
-    /// The palette `ratio` of the way from `self` to `other`.
-    ///
-    /// The same line as [`Interpolable::interpolated`], spelled as a free
-    /// function of the two ends — which is how `iced::theme::palette::mix`
-    /// spells it for a single colour, and the reason the two read alike.
+    /// The palette `ratio` of the way from `self` to `other`. Same line as
+    /// [`Interpolable::interpolated`], spelled as a free function of the two ends.
     pub fn mix(from: Self, to: Self, ratio: f32) -> Self {
         from.interpolated(to, ratio)
     }
 
     /// The same palette, `factor` times as opaque.
     ///
-    /// This is what a fade is, because it is the only thing a fade *can* be:
-    /// iced draws no subtree at reduced opacity (`Renderer` has layers and
-    /// transformations, not alpha), so a fading panel has to be a panel whose
-    /// colours are fading. Every role is scaled, so a role that is already
-    /// translucent — the scrim — fades proportionally instead of jumping to
-    /// full opacity.
+    /// This is what a fade is: iced draws no subtree at reduced opacity, so a
+    /// fading panel has to be a panel whose colours are fading. Every role is
+    /// scaled, so an already translucent role — the scrim — fades proportionally
+    /// instead of jumping to full opacity.
     pub fn fade(self, factor: f32) -> Self {
         let faded = |color: Color| color.scale_alpha(factor);
 
@@ -118,17 +100,9 @@ impl Tokens {
 }
 
 impl Interpolable for Tokens {
-    /// Linear in light, not in sRGB.
-    ///
-    /// Each role goes through `palette::mix`, which converts to linear RGB
-    /// before averaging: half-way between black and white is *half the light*,
-    /// which is not half of the sRGB numbers. Alpha is linear already and is
-    /// interpolated as it stands.
+    /// Linear in light, not in sRGB: each role goes through `palette::mix`,
+    /// which converts before averaging.
     fn interpolated(&self, other: Self, ratio: f32) -> Self {
-        // Exact at both ends. `palette::mix` average in linear RGB and converts
-        // back, and that round trip can move the last bit — so a palette that
-        // has *arrived* has to be the palette, not a rounding error away from
-        // it, or a finished animation would keep differing from its target.
         if ratio <= 0.0 {
             return *self;
         }
@@ -184,9 +158,6 @@ mod tests {
 
     #[test]
     fn a_mid_point_is_a_mid_point_of_light() {
-        // The whole reason this is not a field-wise average of the numbers as
-        // written: sRGB is not linear, so the arithmetic mean of black and white
-        // is four fifths of the light, not half of it.
         let middle = palette::mix(Color::BLACK, Color::WHITE, 0.5);
 
         assert!((middle.r - 0.5).abs() > 0.1, "got {}", middle.r);
@@ -195,8 +166,6 @@ mod tests {
 
     #[test]
     fn alpha_stays_linear() {
-        // Alpha is opacity, not light: a scrim fading in must be half as opaque
-        // at the half-way point, with no transfer function in between.
         let a = Color {
             a: 0.0,
             ..Color::BLACK
@@ -224,7 +193,6 @@ mod tests {
             "a scrim fades, it does not jump"
         );
 
-        // A fade is an alpha, not a tint: the colours themselves are untouched.
         assert_eq!(half.accent.r, tokens.accent.r);
         assert_eq!(half.text.g, tokens.text.g);
     }

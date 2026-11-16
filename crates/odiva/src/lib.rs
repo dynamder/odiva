@@ -5,9 +5,8 @@
 //! everything the person does leaves through the outbox.
 //!
 //! It does hold *layout* state — measured row heights, the scroll offset, whether
-//! the view is following the newest message. That state is not part of the
-//! contract, it is what a window knows about its own pixels, and it is rebuilt
-//! from the snapshot on the next attach.
+//! the view follows the newest message. That is what a window knows about its own
+//! pixels, and it is rebuilt from the snapshot on the next attach.
 
 pub mod model;
 pub mod style;
@@ -28,16 +27,9 @@ use crate::style::column_width;
 pub const SHEET: &str = "odiva-transcript";
 
 /// The height a message is assumed to have before it has reported one.
-///
-/// One short bubble plus its gap. Being wrong is fine — the value is a cache
-/// entry, and `Measured` replaces it the first time the message lays out.
 const ESTIMATE: f32 = 96.0;
 
 /// What the window can be told.
-///
-/// Named as a sentence — subject, verb, object — because the two directions of
-/// this application (a person acting, and a core reporting) meet here, and a
-/// variant called `Toggle` would say nothing about which.
 #[derive(Debug, Clone)]
 pub enum Message {
     /// The person typed.
@@ -54,12 +46,10 @@ pub enum Message {
     UserOpenedLink(String),
     /// The core said something. The only way the transcript can change.
     CoreReported(CoreMessage),
-
-    /// The transcript moved: wheel, drag, or a scroll we asked for.
     TranscriptScrolled(scrollable::Viewport),
-    /// The transcript's viewport got a size. The first one matters: without it
-    /// the window cannot tell "short conversation, sit at the bottom" from
-    /// "long conversation, stay at the top".
+    /// The transcript's viewport got a size. Without the first one the window
+    /// cannot tell "short conversation, sit at the bottom" from "long
+    /// conversation, stay at the top".
     TranscriptResized(Size),
     /// One message laid itself out. Its height is the cache's next entry.
     MessageMeasured { slot: usize, size: Size },
@@ -67,24 +57,18 @@ pub enum Message {
 
 pub struct App {
     messages: Vec<model::Msg>,
-    /// Row heights, index-aligned with `messages`. Owned here because `Measured`
-    /// cannot grow, and rebuilding it must not forget what the old rows cost.
-    heights: Vec<Option<f32>>,
     slots: Measured,
     scroll: Scroll,
     draft: String,
     presence: Presence,
-    /// The theme this window draws itself in. It lives here because the palette
-    /// has to be known while *building* the element tree — iced's markdown widget
-    /// takes colours as an argument, not as a style closure.
+    /// iced's markdown widget takes colours as an argument rather than as a style
+    /// closure, so the theme has to be known while building the element tree.
     theme: Theme,
     /// A pinned clock, for tests. `None` means "ask the system".
     clock: Option<i64>,
-    /// Whether the view follows the newest message.
     pinned: bool,
-    /// What the window has asked the core to do and the core has not been given
-    /// yet. A `Vec` and not a channel because there is no core in this crate
-    /// yet; the running window drains it into one.
+    /// What the window has said and no core has been given yet. A `Vec` because
+    /// there is no core in this crate yet; the running window drains it.
     outbox: Vec<UiMessage>,
 }
 
@@ -99,7 +83,6 @@ impl App {
             .collect();
 
         let mut app = Self {
-            heights: vec![None; messages.len()],
             slots: measured(ESTIMATE, messages.len()).overscan(2),
             scroll: Scroll::new(),
             messages,
@@ -111,9 +94,6 @@ impl App {
             outbox: Vec::new(),
         };
 
-        // A snapshot arrives whole, so nothing else will estimate these rows.
-        // Without this the first frame is all `ESTIMATE`s and the total — and so
-        // the bottom alignment — is wrong until the sensors report.
         for slot in 0..app.messages.len() {
             app.estimate(slot);
         }
@@ -141,9 +121,8 @@ impl App {
     /// Tells the window how tall the transcript is before it lays anything out.
     ///
     /// A running window learns this from a `sensor` on its first frame, but the
-    /// *decision* it feeds — short conversation sits at the bottom, long one
-    /// stays at the top — has to be right on the very first frame, or the first
-    /// paint is the wrong one. Tests and the screenshot harness say it up front.
+    /// decision it feeds — a short conversation sits at the bottom, a long one
+    /// stays at the top — has to be right on the first paint.
     pub fn with_viewport(mut self, height: f32) -> Self {
         self.scroll = Scroll::at(0.0, height.max(0.0));
         self
@@ -156,9 +135,6 @@ impl App {
     }
 
     /// The only door for the core.
-    ///
-    /// Exhaustive over `CoreMessage`: adding a variant upstream breaks this
-    /// build rather than silently dropping a message.
     pub fn apply(&mut self, message: CoreMessage) -> Command<Message> {
         match message {
             CoreMessage::CoreAttachedSession { snapshot } => {
@@ -172,15 +148,13 @@ impl App {
             CoreMessage::MessageAppended { message } => {
                 let slot = self.messages.len();
                 self.messages.push(model::Msg::complete(slot, message));
-                self.heights.push(None);
-                self.grow_slots();
+                self.slots.push();
                 self.estimate(slot);
             }
             CoreMessage::MessageBegan { id, sent, from } => {
                 let slot = self.messages.len();
                 self.messages.push(model::Msg::began(slot, id, sent, from));
-                self.heights.push(None);
-                self.grow_slots();
+                self.slots.push();
                 self.estimate(slot);
             }
             CoreMessage::MessageStreamedText { id, delta } => {
@@ -188,8 +162,6 @@ impl App {
                     msg.append(&delta);
                     msg.slot
                 }) {
-                    // The row is taller than it was: its old height is stale, and
-                    // a stale height is worse than a fresh estimate.
                     self.estimate(slot);
                 }
             }
@@ -217,9 +189,6 @@ impl App {
             CoreMessage::PresenceChanged { presence } => self.presence = presence,
         }
 
-        // A reply that grew while the person was at the bottom should keep them
-        // there; one that grew while they were reading history must not move the
-        // page under their eyes.
         if self.pinned {
             self.follow()
         } else {
@@ -234,18 +203,12 @@ impl App {
                 let text = std::mem::take(&mut self.draft);
 
                 if !text.trim().is_empty() {
-                    // No optimistic echo: the transcript is the core's, and it
-                    // echoes the line back as a `MessageAppended`. In-process,
-                    // that round trip is a channel send.
                     self.outbox.push(UiMessage::UserSubmittedText { text });
                     self.pinned = true;
                     return self.follow();
                 }
             }
             Message::UserRequestedStop => self.outbox.push(UiMessage::UserRequestedStop),
-            // A tapped reply is the person saying that sentence. The core does
-            // not need to know whether it was typed or tapped, so it is the same
-            // message.
             Message::UserTappedReply(text) => {
                 self.outbox.push(UiMessage::UserSubmittedText { text });
                 self.pinned = true;
@@ -263,25 +226,15 @@ impl App {
             Message::TranscriptResized(size) => {
                 self.scroll.resized(size.height);
 
-                // The viewport only becomes known here. Until it is, `follow`
-                // deliberately does nothing — a target computed against a height
-                // of zero is a scroll position nobody asked for.
                 if self.pinned {
                     return self.follow();
                 }
             }
             Message::TranscriptScrolled(viewport) => {
                 self.scroll.update(&viewport);
-
-                // Reading the bottom means following it; anywhere else means the
-                // person is looking at something, and new text waits.
                 self.pinned = self.scroll.y() + self.scroll.height() >= self.total() - 2.0;
             }
             Message::MessageMeasured { slot, size } => {
-                if let Some(height) = self.heights.get_mut(slot) {
-                    *height = Some(size.height);
-                }
-
                 if self.slots.measure(slot, size) && self.pinned {
                     return self.follow();
                 }
@@ -317,11 +270,6 @@ impl App {
 
     /// How much empty space to put above the transcript so a short conversation
     /// sits on the composer.
-    ///
-    /// This is the bottom alignment the window could not do before: the padding
-    /// needs both numbers, and a virtualised list is where they finally exist.
-    /// It only appears when there is nothing to scroll, so it cannot fight the
-    /// scroll offset.
     pub fn headroom(&self) -> f32 {
         (self.scroll.height() - self.total()).max(0.0)
     }
@@ -357,11 +305,8 @@ impl App {
         self.theme.clone()
     }
 
-    /// Scrolls to the bottom, saying so, so `Scroll`'s copy stays honest.
+    /// Scrolls to the bottom, saying so, so [`Scroll`]'s copy stays honest.
     fn follow(&mut self) -> Command<Message> {
-        // Before the first layout the viewport height is zero, and "bottom" is
-        // not a position yet. Following now would park the transcript at a
-        // distance from the top that means nothing.
         if self.scroll.height() <= 0.0 {
             return Command::none();
         }
@@ -371,30 +316,12 @@ impl App {
         operation::scroll_to(SHEET, self.scroll.to(target))
     }
 
-    /// Rebuilds the slot table when the row count changed, restoring the heights
-    /// already known. `Measured` has no way to grow, and losing the cache would
-    /// move every row above the viewport back to its estimate.
-    fn grow_slots(&mut self) {
-        if self.slots.len() == self.heights.len() {
-            return;
-        }
-
-        self.slots = measured(ESTIMATE, self.heights.len()).overscan(2);
-
-        for (slot, height) in self.heights.iter().enumerate() {
-            if let Some(height) = height {
-                self.slots
-                    .measure(slot, Size::new(column_width(), *height));
-            }
-        }
-    }
-
     /// Puts this row's best known height into the slot table.
     ///
-    /// Called whenever a row's *content* changes: a new message, or a streamed
-    /// reply growing. The row's sensor will overwrite it with the truth a frame
-    /// later; until then the estimate is what keeps the total — and therefore
-    /// the scroll position and the bottom padding — from being nonsense.
+    /// Called whenever a row's *content* changes: the row's sensor overwrites it
+    /// with the truth a frame later, and until then the estimate keeps the total —
+    /// and therefore the scroll position and the bottom padding — from being
+    /// nonsense.
     fn estimate(&mut self, slot: usize) {
         let Some(msg) = self.messages.get(slot) else {
             return;
@@ -405,8 +332,6 @@ impl App {
             .and_then(|before| self.messages.get(before))
             .map(|before| before.sent);
 
-        // The divider belongs to the row: it is built inside it, so it is part of
-        // its height.
         let divider = if time::needs_divider(previous, msg.sent) {
             32.0
         } else {
@@ -414,10 +339,6 @@ impl App {
         };
 
         let height = msg.estimated_height() + divider;
-
-        if let Some(cached) = self.heights.get_mut(slot) {
-            *cached = Some(height);
-        }
 
         self.slots.measure(slot, Size::new(column_width(), height));
     }

@@ -1,18 +1,12 @@
 //! A typed visual language for iced widgets.
 //!
-//! iced styles are closures from a theme to a `Style` struct. Flexible, and
-//! completely unreadable at a call site: `text(..).style(|theme| ..)` says
-//! nothing about *what* the text is. This module splits the two halves:
+//! iced styles are closures from a theme to a `Style` struct, which say nothing
+//! at a call site about what a widget *is*. Here a **kind** (the application's
+//! type) names the widget, a **recipe** says how it paints, and
+//! [`StyleExt::styled`] wires the two once per widget type.
 //!
-//! * a **kind** — the application's type — names what a widget *is*;
-//! * a **recipe** — this module's trait — says how that kind paints;
-//! * [`StyleExt::styled`] does the wiring, once per widget type.
-//!
-//! The kinds stay in the application, because "a sidebar" and "a preview" only
-//! mean something there, and a library that guessed them would be a theme, not
-//! a tool. What lives here is the machinery plus [`Tokens`]: the palette every
-//! recipe reads, derived from `Theme` so that a recipe never touches raw
-//! colours.
+//! Kinds stay in the application. What lives here is the machinery and
+//! [`Tokens`], derived from `Theme` so a recipe never touches raw colours.
 
 pub mod ext;
 pub mod recipe;

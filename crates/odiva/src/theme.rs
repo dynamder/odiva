@@ -1,24 +1,15 @@
 //! The palette.
 //!
-//! Two themes, both this application's own. Not a stock editor theme: the
-//! window is a conversation held all day, so the surfaces stay quiet and neutral
-//! and the one accent marks what a hand can act on. A developer-tool palette
-//! (mauve surfaces, saturated everything) would read as an editor with a chat
-//! bolted on.
-//!
-//! Everything downstream derives from these six values: `ericed::style::Tokens`
-//! reads iced's *extended* palette, which iced generates from the base one. So
-//! changing a colour here changes the window, the bubbles, the borders and the
-//! markdown inline code together.
+//! Two themes, both this application's own: quiet surfaces and one accent for
+//! what a hand can act on. Everything downstream derives from these six values —
+//! `ericed::style::Tokens` reads iced's *extended* palette, which iced generates
+//! from the base one.
 
 use iced::theme::Palette;
 use iced::{Color, Theme};
 
-/// The theme the window opens in.
-///
-/// Dark by default, from the use scene rather than from taste: a companion on a
-/// desk shares the screen with an editor and a terminal all day, and a bright
-/// window in that company is a lamp in the face.
+/// The theme the window opens in. Dark because a companion on a desk shares the
+/// screen with an editor and a terminal all day.
 pub fn dark() -> Theme {
     Theme::custom(
         "odiva dark",

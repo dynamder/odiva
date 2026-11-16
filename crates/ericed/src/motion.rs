@@ -1,81 +1,18 @@
 //! A value that moves towards a target, and the clock that moves it.
 //!
-//! iced has the pieces — `iced::Animation` interpolates, `RedrawRequested` is a
-//! frame, `Subscription` can turn one into a message — but nothing joins them,
-//! and the join is where every application gets it slightly wrong: a clock read
-//! in three places, a subscription that is never turned off, an animation that
-//! starts from a stale instant.
+//! iced has the pieces — `Animation` interpolates, `RedrawRequested` is a frame,
+//! `Subscription` turns one into a message — and nothing that joins them.
 //!
-//! This module is that join, and it is deliberately small:
+//! A moving value must not move the layout. `pin(content).x(offset)` moves the
+//! *layout node*, so the child is laid out with `limits.max() - position`
+//! available and text re-wraps on every frame. [`translate`] and [`scale`] apply
+//! the offset while drawing instead: the child keeps its width and its shape,
+//! and only the pixels move.
 //!
-//! * [`Curve`] is **duration plus an iced [`Easing`]**, because easing is a
-//!   modification of the curve and splitting them into two chained calls says
-//!   otherwise. `Easing::Custom` takes a `fn(f32) -> f32`, so a hand-written
-//!   shape is not a second mechanism.
-//! * [`Track`] is the value: it records a target ([`Track::to`]), advances when
-//!   told ([`Track::tick`]) and is read from a `view` ([`Track::value`]). The
-//!   keyframes and the projection are iced's `Animation<f32>`; the contract
-//!   around them — declared now, started on a frame, stable between frames — is
-//!   the part iced does not have.
-//! * [`animate`] is the whole functional interface: a value in, a value out.
-//! * [`Motion`] names "does anything move", so [`frames`] can be the only place
-//!   that decides whether the frame subscription is installed.
-//! * [`transform`] is what a value is *applied* with — a draw-time
-//!   [`Placement`], not a layout change. [`translate`] and [`scale`] are the two
-//!   constructors, and between them they cover what iced's renderer can
-//!   honestly draw.
-//!
-//! # A moving value must not move the layout
-//!
-//! The obvious way to slide something with iced is to put it at an x coordinate:
-//! `pin(content).x(offset)`. It is also wrong, and quietly so: `pin` moves the
-//! *layout node*, and the child is laid out with `limits.max() - position`
-//! available. A pane sliding in from the right is therefore re-laid-out at a
-//! narrower width on every frame — text re-wraps, borders shorten, and the
-//! "animation" is really a resize.
-//!
-//! [`translate`] moves the drawing instead. The child keeps its layout, its
-//! width and its shape, and the offset only reaches the pixels. That is the
-//! difference between an animation and a per-frame relayout, and it is not
-//! something a `Track` can express on its own: a value needs somewhere to go.
-//!
-//! # The clock has two possible owners, and the code is the same
-//!
-//! `Track` never reads a clock. It is advanced by [`Track::tick`], which is
-//! idempotent, so either owner works without changing a line of drawing code:
-//!
-//! ```text
-//! App::update(Msg::Frame(now)) ──► track.tick(now) ──► view: track.value()
-//! widget::update(RedrawRequested(now)) ──► same tick ──► draw: same value
-//! ```
-//!
-//! The first is pure — time arrives as a message, so the animation is a
-//! function of the message stream and can be replayed and snapshot-tested. It
-//! costs a full `view` + `layout` per frame, which for a small application is
-//! nothing and for a desktop shell is everything.
-//!
-//! The second is iced's own trick (`text_input`'s caret, every `request_redraw`
-//! in a widget): no messages, no rebuild, only a repaint. It cannot be replayed,
-//! because the instant comes from the widget.
-//!
-//! Pick per animation, not per application.
-//!
-//! # What is not here
-//!
-//! Repeat, delay and auto-reverse: a [`Curve`] is one transition, and those are
-//! what `iced::Animation` is for. But the division is not only cosmetic — it is
-//! what iced's animation can *hold*. `Animation<T>` interpolates a state that
-//! maps onto a single `f32` keyframe: `FloatRepresentable` is implemented for
-//! `bool` and `f32` and for nothing else, and neither it nor `Interpolable` can
-//! be implemented for `Color` or `Vector` outside iced, because the trait and
-//! the type would both be foreign. So a value that is not one number cannot be
-//! an `Animation` state, and a `Color` cannot be its projection.
-//!
-//! [`Track`] is exactly that gap: one number moving, with the projection —
-//! a `Vector`, a `Color`, a whole `Tokens` — left to the caller. Everything
-//! below the gap is iced's: [`Curve::easing`] is an `Easing`, `Track`'s
-//! keyframes are an `Animation<f32>`, and the shapes are the thirty iced
-//! already ships plus `Easing::Custom`.
+//! [`Track`] never reads a clock; it is advanced by [`Track::tick`], which is
+//! idempotent, so either an application frame message (`update`) or a widget's
+//! `RedrawRequested` (`draw`) can own it without changing a line of drawing code.
+//! [`frames`] is the one place that decides whether the subscription exists.
 
 use iced_core::animation::{Animation, Easing};
 use iced_core::layout;
@@ -93,17 +30,13 @@ use iced_futures::Subscription;
 
 /// A duration and the shape of the motion across it.
 ///
-/// The shape is iced's [`Easing`]: thirty named curves, plus [`Easing::Custom`],
-/// which takes a `fn(f32) -> f32`. A hand-written spline is therefore not a
-/// second mechanism — [`Curve::within`] *is* `Easing::Custom` spelled as a
-/// function, and everything iced names is reachable through [`Curve::eased`].
+/// The shape is iced's [`Easing`], so a hand-written `fn(f32) -> f32` is
+/// [`Curve::within`] rather than a second mechanism.
 ///
-/// A shape may leave the unit interval. `EaseInBack`, `EaseOutElastic` and
-/// friends overshoot on purpose — that is the whole point of a pop-in — so
-/// [`Track::value`] on such a curve overshoots its target and lands outside the
-/// range between the two ends. Positioning something usually wants exactly
-/// that; mixing two `Color`s should go through `iced::theme::palette::mix`,
-/// which clamps.
+/// A shape may leave the unit interval: `EaseInBack` and `EaseOutElastic`
+/// overshoot on purpose, so [`Track::value`] on such a curve can land outside the
+/// range between the two ends. Mixing two `Color`s should therefore go through
+/// `iced::theme::palette::mix`, which clamps.
 #[derive(Debug, Clone, Copy)]
 pub struct Curve {
     duration: Duration,
@@ -112,18 +45,14 @@ pub struct Curve {
 
 impl Curve {
     /// A curve of the given duration, shaped by `easing`.
-    ///
-    /// This is the whole of iced's easing catalogue, which is the reason this
-    /// constructor exists at all: `Curve::out` is a convenience, not a limit.
     pub const fn eased(duration: Duration, easing: Easing) -> Self {
         Self { duration, easing }
     }
 
     /// A curve of the given duration, shaped by `shape`.
     ///
-    /// `shape` takes progress in `0.0..=1.0` and returns progress. It is
-    /// [`Easing::Custom`] spelled as a function: it is expected to map `0` to
-    /// `0` and `1` to `1`, and nothing here checks that it does.
+    /// `shape` takes progress in `0.0..=1.0` and is expected to map `0` to `0`
+    /// and `1` to `1`; nothing here checks that it does.
     pub const fn within(duration: Duration, shape: fn(f32) -> f32) -> Self {
         Self::eased(duration, Easing::Custom(shape))
     }
@@ -138,7 +67,7 @@ impl Curve {
         Self::eased(duration, Easing::EaseOutCubic)
     }
 
-    /// Slow at both ends; the least mechanical of the three.
+    /// Slow at both ends.
     pub const fn in_out(duration: Duration) -> Self {
         Self::within(duration, shapes::smootherstep)
     }
@@ -149,9 +78,6 @@ impl Curve {
     }
 
     /// The shape, as iced names it.
-    ///
-    /// This is what [`Track`] hands to `Animation`, so the easing is iced's
-    /// data all the way down; `Curve` only adds "and for how long".
     pub fn easing(&self) -> Easing {
         self.easing
     }
@@ -164,10 +90,8 @@ impl Curve {
 
 mod shapes {
     /// Perlin's smootherstep: zero first *and* second derivative at both ends.
-    ///
-    /// iced has no name for this one — `EaseInOutQuint` is close, but its second
-    /// derivative at the ends is not zero — so it stays a `Custom` shape rather
-    /// than being approximated by a named easing.
+    /// No named iced easing has that — `EaseInOutQuint` comes close — so it stays
+    /// a `Custom` shape rather than an approximation.
     pub(super) fn smootherstep(p: f32) -> f32 {
         (6.0 * p.powi(5) - 15.0 * p.powi(4) + 10.0 * p.powi(3)).clamp(0.0, 1.0)
     }
@@ -175,35 +99,18 @@ mod shapes {
 
 /// A value that moves towards a target.
 ///
-/// A plain value: `update` mutates it, `view` reads it. No interior mutability
-/// and no shared handle, because nothing but the message carrying the instant
-/// should be able to move an animation — the same shape iced's own stateful
-/// widgets have (`&mut` in `update`, `&self` in `view`).
-///
-/// [`Clone`] copies the state, not the handle: a cloned track is a second
-/// animation that happens to start from the same value. That is what makes a
-/// track per row, or per kind, cheap to write down.
+/// A plain value: `update` mutates it, `view` reads it. [`Clone`] copies the
+/// state, not a handle, so a track per row is cheap to write down.
 #[derive(Debug, Clone)]
 pub struct Track {
     curve: Curve,
-    /// iced's interpolator: two keyframes, the instant the transition started at,
-    /// and the projection of a value at an instant.
-    ///
-    /// What it does *not* have is the contract around it — a target declared now
-    /// and started on a frame, a value that does not move between frames — and
-    /// that is the rest of this struct.
     animation: Animation<f32>,
-    /// A target that has been declared but not yet given a start time.
     pending: Option<f32>,
-    /// The last instant `tick` was given; what `value` is measured at.
     now: Instant,
 }
 
 impl Track {
     /// A track that is already at `value` and not moving.
-    ///
-    /// The instant inside is an epoch, not a start: it is replaced by the first
-    /// [`Track::tick`], and until then every projection returns `value`.
     pub fn new(value: f32) -> Self {
         Self {
             curve: Curve::in_out(Duration::from_millis(200)),
@@ -222,10 +129,9 @@ impl Track {
     /// Declares where the value should end up.
     ///
     /// This does **not** start the motion: the start time comes from the next
-    /// [`Track::tick`], so an animation always begins on a frame rather than on
-    /// whatever instant the state changed at. Declaring the target that is
-    /// already on its way is a no-op, so an `update` can declare it on every
-    /// message — every frame of a drag, say — without stalling the motion.
+    /// [`Track::tick`], so a motion always begins on a frame. Declaring the
+    /// target that is already on its way is a no-op, so `update` can declare it
+    /// on every message without stalling the motion.
     pub fn to(&mut self, target: f32) {
         let upcoming = self.pending.unwrap_or_else(|| self.animation.value());
 
@@ -238,10 +144,7 @@ impl Track {
 
     /// Advances the track to `now`, starting a declared target if there is one.
     ///
-    /// Idempotent: calling it twice with the same instant changes nothing. That
-    /// is what lets either clock owner use the same code — an application frame
-    /// message calling this in `update`, or a widget calling it from
-    /// `RedrawRequested` and reading the value later in `draw`.
+    /// Idempotent: two calls with the same instant change nothing.
     pub fn tick(&mut self, now: Instant) {
         self.now = now;
 
@@ -249,30 +152,19 @@ impl Track {
             return;
         };
 
-        // iced's builders take `self` by value, so the settings ride along on a
-        // copy of the interpolation. One clone per *transition*, never per frame.
         self.animation = self
             .animation
             .clone()
             .duration(self.curve.duration())
             .easing(self.curve.easing());
 
-        // `go_mut` starts from the value that is on screen — iced computes the
-        // interrupted keyframe itself — so a target declared mid-flight does not
-        // jump back to where the previous motion began.
         self.animation.go_mut(target, now);
     }
 
     /// The value as of the last ticked instant.
     ///
-    /// This is what a `view` should draw: the frame that is on screen, not the
-    /// one that would be there if time had passed while the message was being
-    /// handled. Between ticks the value is exactly stable, so a rebuild caused
-    /// by an unrelated message cannot make the picture jump ahead.
-    ///
-    /// An overshooting curve (`EaseOutBack` and friends) can put this outside
-    /// the range between the previous value and the target; that is the curve's
-    /// doing, not a bug.
+    /// Between ticks the value is exactly stable, so an unrelated rebuild cannot
+    /// make the picture jump ahead.
     pub fn value(&self) -> f32 {
         self.at(self.now)
     }
@@ -284,42 +176,28 @@ impl Track {
 
     /// Whether anything is left to do: a target waiting to start, or a motion
     /// that has not finished.
-    ///
-    /// A pending target counts, otherwise declaring one would never be ticked.
     pub fn is_moving(&self) -> bool {
         self.pending.is_some() || self.animation.is_animating(self.now)
     }
 }
 
 /// Applies a track's current value to whatever the caller wants to build.
-///
-/// `f` is a plain `fn(f32) -> B`, which is the whole of the "functional" part:
-/// a style, an element, a vector, a length. What differs between call sites is
-/// *when* it runs, and that is the clock's business, not this function's.
 pub fn animate<B>(track: &Track, f: impl FnOnce(f32) -> B) -> B {
     f(track.value())
 }
 
-/// "Is anything in here moving?"
-///
-/// Implemented by the application so that [`frames`] can ask one question
-/// instead of the application remembering to ask at all.
+/// "Is anything in here moving?" Implemented by the application so [`frames`] can
+/// ask one question.
 pub trait Motion {
     fn is_moving(&self) -> bool;
 }
 
 /// The frame subscription, installed only while something moves.
 ///
-/// iced's `window::frames()` is a hook on `RedrawRequested`: it reports frames
-/// that already happened. If it is subscribed unconditionally the application
-/// redraws forever; if it is subscribed conditionally, the condition has to be
-/// somewhere. This is that somewhere.
-///
-/// `f` has to be a function item or a **non-capturing** closure, because
-/// `Subscription::map` requires a zero-sized mapper (iced checks this at compile
-/// time). A mapper that needs state should be `Subscription::with` instead —
-/// though a frame mapper rarely does, since the state it would want is the
-/// instant it is being handed.
+/// Subscribed unconditionally, the application redraws forever. `f` has to be a
+/// function item or a **non-capturing** closure: `Subscription::map` requires a
+/// zero-sized mapper, checked at compile time. A mapper that needs state should
+/// be `Subscription::with` instead.
 ///
 /// ```no_run
 /// # use ericed::motion::{self, Motion};
@@ -346,16 +224,14 @@ where
 
 /// Where a [`Transform`] puts its content.
 ///
-/// The set is closed on purpose. iced exposes translations and *uniform* scales
-/// (`iced_core::Transformation`) and nothing else: no rotation, no skew, no
-/// non-uniform scale, because `scale_factor()` is a single number and both
-/// backends use it to size glyphs, borders and shadows. An enum makes that
-/// limit visible in the type; a raw `Transformation` would let a caller write a
-/// matrix the renderer cannot honestly draw.
+/// Closed on purpose: iced exposes translations and *uniform* scales and nothing
+/// else, because `scale_factor()` is one number that both backends use to size
+/// glyphs, borders and shadows. An enum makes that limit visible; a raw
+/// `Transformation` would let a caller write a matrix the renderer cannot draw.
 ///
-/// Two kinds, because a transformation can be known at two different times:
-/// an absolute one before layout, and a scaling whose pivot is a property of
-/// the content's own box, which only exists after layout.
+/// Two kinds, because a transformation can be known at two times: an absolute
+/// one before layout, and a scaling whose pivot is a property of the content's
+/// own box, which only exists after layout.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Placement {
     /// The same transformation wherever the content lands.
@@ -365,7 +241,6 @@ pub enum Placement {
 }
 
 impl Placement {
-    /// The matrix this placement means for a content laid out at `bounds`.
     fn resolve(&self, bounds: Rectangle) -> Transformation {
         match *self {
             Self::Absolute(transformation) => transformation,
@@ -404,9 +279,7 @@ impl Anchor {
 }
 
 /// A widget drawn through a [`Transformation`], without being laid out through
-/// one.
-///
-/// Build one with [`translate`], [`scale`] or [`transform`].
+/// one. Build one with [`translate`], [`scale`] or [`transform`].
 pub struct Transform<'a, Message, Theme = iced_widget::Theme, Renderer = iced_widget::Renderer>
 where
     Renderer: iced_core::Renderer,
@@ -418,15 +291,10 @@ where
 
 /// Draws `content` shifted by `offset`, leaving the layout exactly as it was.
 ///
-/// This is how a moving value reaches the screen: `offset` is normally
-/// `track.value()` scaled by whatever the animation measures in. Because the
-/// offset is applied while drawing, the child keeps its width and is not
-/// re-laid-out — which is the one thing a layout offset cannot promise.
-///
-/// The catch is that the offset is invisible to layout: the space the content
-/// *would* occupy is still its unshifted box, so a caller that wants the shift
-/// clipped (a pane sliding over its neighbours) asks for [`Transform::clip`].
-/// Hit testing is adjusted, so the content stays clickable while it moves.
+/// The offset is invisible to layout: the space the content *would* occupy is
+/// still its unshifted box, so a caller that wants the shift clipped asks for
+/// [`Transform::clip`]. Hit testing is adjusted, so the content stays clickable
+/// while it moves.
 pub fn translate<'a, Message, Theme, Renderer>(
     content: impl Into<Element<'a, Message, Theme, Renderer>>,
     offset: Vector,
@@ -441,11 +309,8 @@ where
 }
 
 /// Draws `content` scaled by `factor` about its own centre, leaving the layout
-/// exactly as it was.
-///
-/// `factor` is uniform, because iced's `Transformation` has one scale factor —
-/// see [`Placement`]. A factor below `1.0` works: unlike `iced_widget::Float`,
-/// which only floats *out* of its bounds, this scales the drawing either way.
+/// exactly as it was. A factor below `1.0` works: unlike `iced_widget::Float`,
+/// this scales the drawing either way.
 pub fn scale<'a, Message, Theme, Renderer>(
     content: impl Into<Element<'a, Message, Theme, Renderer>>,
     factor: f32,
@@ -464,34 +329,24 @@ where
 
 /// Draws `content` through `placement`, leaving the layout exactly as it was.
 ///
-/// # What this widget owes its child
-///
-/// Transforming a subtree is five obligations, and forgetting any one of them
-/// is a bug that only shows up when the content moves:
+/// What the widget owes its child, for a transformation to be invisible to
+/// everything but the pixels:
 ///
 /// | what | how |
 /// | --- | --- |
-/// | layout | forwarded untouched — the whole point |
+/// | layout | forwarded untouched |
 /// | painting | `with_transformation` around the child's draw |
 /// | clipping | the child is handed `viewport * inverse` |
 /// | hit testing | the child is handed `cursor * inverse` |
 /// | overlays | `translation + transformation.translation()` |
 ///
-/// The last one is a limitation, not a trick: iced's `overlay::Element` carries
-/// an additive `translation` and no matrix, so a popup inside a *scaled*
-/// subtree can only be moved, not scaled. Translation is exact; scaling is an
-/// approximation, and this paragraph is where that is admitted.
+/// The last one is a limit of iced, not a trick: `overlay::Element` carries an
+/// additive translation and no matrix, so a popup inside a *scaled* subtree is
+/// moved but not scaled.
 ///
-/// # Not the same thing as `iced_widget::Float`
-///
-/// `Float` uses the same renderer primitive but leaves the tree: when it floats
-/// it draws nothing in place and re-draws itself through `overlay`, which loses
-/// the ancestors' clipping and puts it above everything. That is what "floating
-/// over the layout" means. This widget stays a widget — it is clipped by its
-/// parents, ordered by the tree, and hit-testable in place — which is what
-/// "moving inside the layout" means. If the intent is a translucent panel above
-/// the application, use `Float`; if it is a pane sliding in from the side, use
-/// this.
+/// Unlike `iced_widget::Float`, this stays a widget: it is clipped by its
+/// parents, ordered by the tree and hit-testable in place. `Float` leaves the
+/// tree and draws through `overlay`, which loses the ancestors' clipping.
 pub fn transform<'a, Message, Theme, Renderer>(
     content: impl Into<Element<'a, Message, Theme, Renderer>>,
     placement: Placement,
@@ -506,18 +361,15 @@ where
     }
 }
 
-impl<'a, Message, Theme, Renderer> Transform<'a, Message, Theme, Renderer>
+impl<Message, Theme, Renderer> Transform<'_, Message, Theme, Renderer>
 where
     Renderer: iced_core::Renderer,
 {
     /// Clips the drawing to the box the content was laid out in.
     ///
-    /// Off by default, because a transformation is invisible to layout and a
-    /// caller that wants the overflow gone has to say so. On, it is the same
-    /// `container(..).clip(true)` region — the *untransformed* box — which is
-    /// what a slide wants (a pane must not paint over its neighbours) and what
-    /// a growth usually does not (a card getting bigger would be trimmed at its
-    /// original edges).
+    /// Off by default: a transformation is invisible to layout, so a caller that
+    /// wants the overflow gone has to say so. On, it is the *untransformed* box —
+    /// what a slide wants, and what a growing card usually does not.
     pub fn clip(mut self, clip: bool) -> Self {
         self.clip = clip;
         self
@@ -526,10 +378,9 @@ where
 
 /// The window-space cursor, moved into the child's own space.
 ///
-/// `Cursor * Transformation` applies the matrix; it does not invert, so the
-/// inverse is the caller's job. This is the same line iced's own `Float` writes
-/// (`cursor * inverse`), and it is the reason the child stays clickable while
-/// it moves.
+/// `Cursor * Transformation` applies the matrix without inverting it, so the
+/// inverse is the caller's job; this is the line that keeps the child clickable
+/// while it moves.
 fn into_content(cursor: mouse::Cursor, transformation: Transformation) -> mouse::Cursor {
     cursor * transformation.inverse()
 }
@@ -563,7 +414,6 @@ where
         self.content.as_widget().size_hint()
     }
 
-    // The whole point: the layout is the child's, untouched by the offset.
     fn layout(
         &mut self,
         tree: &mut Tree,
@@ -650,10 +500,6 @@ where
                 .draw(tree, renderer, theme, style, layout, cursor, viewport);
         };
 
-        // Three ways to get the same pixels: clipped, moved, or neither. The
-        // identity case is not an optimisation for its own sake — most frames
-        // of most animations are the settled ones, and a renderer group per
-        // frame is a layer per frame.
         if self.clip {
             renderer.with_layer(bounds, paint);
         } else if transformation == Transformation::IDENTITY {
@@ -673,9 +519,6 @@ where
     ) -> Option<overlay::Element<'b, Message, Theme, Renderer>> {
         let transformation = self.placement.resolve(layout.bounds());
 
-        // Overlays carry a translation, not a matrix: the popup follows a moving
-        // content exactly, and a scaling one only as far as its translation
-        // component. `Placement::Scale` says the same thing in the docs.
         self.content.as_widget_mut().overlay(
             tree,
             layout,
@@ -716,7 +559,6 @@ mod tests {
             assert_eq!(curve.shape(0.0), 0.0);
             assert_eq!(curve.shape(1.0), 1.0);
             assert!(curve.shape(0.5) > 0.0 && curve.shape(0.5) < 1.0);
-            // Out of range progress is clamped rather than extrapolated.
             assert_eq!(curve.shape(-1.0), 0.0);
             assert_eq!(curve.shape(2.0), 1.0);
         }
@@ -726,13 +568,8 @@ mod tests {
     fn the_named_curves_are_iced_easings() {
         let hundred = Duration::from_millis(100);
 
-        // The convenience constructors are names for `Easing` variants, not a
-        // second catalogue: an easing iced names is reachable without ericed
-        // growing a variant for it.
         assert_eq!(Curve::linear(hundred).easing(), Easing::Linear);
         assert_eq!(Curve::out(hundred).easing(), Easing::EaseOutCubic);
-
-        // `within` is `Easing::Custom` spelled as a function.
         assert!(matches!(
             Curve::within(hundred, shapes::smootherstep).easing(),
             Easing::Custom(_)
@@ -754,11 +591,8 @@ mod tests {
         track.tick(start);
         track.tick(start + Duration::from_millis(100));
 
-        // `EaseOutBack` overshoots on purpose, and it is the *curve* that
-        // decides that — not a `Track` that happens to be wrong.
         assert!(track.value() > 1.0, "got {}", track.value());
 
-        // It still lands exactly on the target.
         track.tick(start + Duration::from_millis(200));
         assert_eq!(track.value(), 1.0);
         assert!(!track.is_moving());
@@ -778,9 +612,7 @@ mod tests {
 
         track.to(1.0);
 
-        // Declared, so something is left to do…
         assert!(track.is_moving());
-        // …but the clock has not moved, so the value has not either.
         assert_eq!(track.value(), 0.0);
     }
 
@@ -814,8 +646,6 @@ mod tests {
 
         let sampled = track.value();
 
-        // Reading at a later instant is a different question, and asking it
-        // must not change what a `view` sees.
         assert!(track.at(start + Duration::from_millis(300)) == 1.0);
         assert_eq!(track.value(), sampled);
     }
@@ -835,7 +665,6 @@ mod tests {
         track.to(0.0);
         track.tick(start + Duration::from_millis(100));
 
-        // The new motion starts at the value that was on screen, not at 1.0.
         assert!((track.value() - interrupted).abs() < 1e-4);
 
         track.tick(start + Duration::from_millis(300));
@@ -849,8 +678,6 @@ mod tests {
 
         track.to(1.0);
 
-        // A caller that declares the target on every message must not reset the
-        // motion on every message.
         for step in 0..=4 {
             track.to(1.0);
             track.tick(start + Duration::from_millis(step * 50));
@@ -867,9 +694,6 @@ mod tests {
             iced_widget::container(iced_widget::text("x")).into();
 
         let laid_out = content.as_widget().size();
-
-        // A layout-based offset would hand the child a narrower `Limits` and
-        // the size would change with it. A drawing offset must not.
         let moved = translate(content, Vector::new(120.0, 0.0));
 
         assert_eq!(moved.size(), laid_out);
@@ -883,9 +707,6 @@ mod tests {
             iced_widget::container(iced_widget::text("x")).into();
 
         let laid_out = content.as_widget().size();
-
-        // The same promise as `translate`, and the reason `Float` cannot stand
-        // in for it: a scaled widget is still laid out at its own size.
         let grown = scale(content, 1.5);
 
         assert_eq!(grown.size(), laid_out);
@@ -912,9 +733,7 @@ mod tests {
 
         let transformation = doubling.resolve(bounds);
 
-        // The pivot does not move…
         assert_eq!(bounds.center() * transformation, bounds.center());
-        // …and a corner moves away from it, by the factor.
         assert_eq!(
             Point::new(0.0, 0.0) * transformation,
             Point::new(-50.0, -50.0)
@@ -923,9 +742,6 @@ mod tests {
 
     #[test]
     fn the_cursor_maps_back_into_the_untransformed_content() {
-        // Obligations three and four of the contract: the child is asked about
-        // its *own* coordinates, so a click on the scaled picture has to land on
-        // the point that produced that pixel.
         let bounds = Rectangle::new(Point::new(10.0, 20.0), Size::new(100.0, 50.0));
         let transformation = Placement::Scale {
             factor: 2.0,

@@ -1,11 +1,9 @@
 //! Screenshots, because the thing being decided is what the window looks like.
 //!
 //! Each case is a *script* of `CoreMessage`s replayed into a fresh window, not a
-//! hand-built model. That makes every screenshot a test of the seam as well as a
-//! picture: if the protocol stops being enough to describe a conversation, the
-//! picture stops being producible.
-//!
-//! Times are fixed rather than "now", so the pictures are the same every run.
+//! hand-built model, so every screenshot is a test of the seam as well as a
+//! picture. Times are fixed rather than "now", so the pictures are the same every
+//! run.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -15,7 +13,6 @@ use iced::{Element, Size, Task, Theme, window};
 use odiva::{App, Message, theme};
 use odiva_proto::{CoreMessage, FileRef, Presence, Side, Snapshot, WireMessage};
 
-/// A fixed clock. 2026-03-15T07:00:00Z, and every label below is relative to it.
 const NOW: i64 = 1_773_000_000_000;
 
 fn minutes_before(now: i64, minutes: i64) -> i64 {
@@ -101,11 +98,8 @@ fn streaming() -> Vec<CoreMessage> {
     script
 }
 
-/// Six jobs at once, said in two messages.
-///
-/// The count lives in the agent's sentence and a list, because that is how a
-/// person would report it — not in six bubbles, and not in an interface widget
-/// that knows what a task is.
+/// Six jobs at once, said in two messages: the count lives in the agent's
+/// sentence and a list, not in six bubbles or a widget that knows what a task is.
 fn busy() -> Vec<CoreMessage> {
     let mut question = said(
         3,
@@ -146,10 +140,6 @@ fn busy() -> Vec<CoreMessage> {
 }
 
 /// A conversation long enough that building it whole would be the bug.
-///
-/// 300 messages, most of them short, a few with code. The picture should show
-/// the last screenful, and the test beside it should show that only a screenful
-/// was built.
 fn long() -> Vec<CoreMessage> {
     let mut messages = Vec::new();
 
@@ -178,7 +168,6 @@ fn long() -> Vec<CoreMessage> {
 /// Which conversation to photograph.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Fixture {
-    /// Nothing said yet — the first thing a new install shows.
     Empty,
     Chat,
     Streaming,
@@ -242,12 +231,6 @@ impl iced::Program for Harness {
             let _ = app.apply(message);
         }
 
-        // After the script, because attaching a session ends with a scroll to the
-        // bottom: the viewport is what a *window* knows, and saying it last is
-        // saying "this is the window, and it is showing the top".
-        //
-        // The transcript band of a 1040x700 window: the header, two hairlines and
-        // the composer take the rest.
         let app = app.with_viewport(583.0).following(self.following);
 
         (app, Task::none())
@@ -282,19 +265,11 @@ fn target_dir() -> PathBuf {
 #[test]
 fn render_screenshots() {
     let cases = [
-        // The first screen a new install shows.
         ("chat-empty", Fixture::Empty, true, false),
         ("chat", Fixture::Chat, true, false),
-        // Mid-reply, scrolled away from the newest line: the state that decides
-        // whether the scroll policy and the "jump to newest" affordance are
-        // right.
         ("chat-streaming", Fixture::Streaming, false, false),
-        // The one that decides the design: six jobs, two messages.
         ("chat-busy", Fixture::Busy, true, false),
-        // 300 messages, one screenful built.
         ("chat-long", Fixture::Long, false, false),
-        // The same description rendered by another theme, which is the claim a
-        // palette makes.
         ("chat-light", Fixture::Chat, true, true),
     ];
 

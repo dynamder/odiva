@@ -8,24 +8,15 @@ version = "0.1.0"
 rust-version = "1.88"
 publish = false
 
-# One place for versions, on purpose: every crate in this workspace must resolve
-# to the *same* iced_core/iced_widget copies, or `MouseArea` becomes two
-# different types and every error message turns into nonsense.
-#
-# `ericed` is vendored from ../sofaia, where the two crates were one workspace.
-# They are two now, so these versions must be bumped in both places together — a
-# mismatch shows up as a trait-not-implemented error about `Widget`, several
-# layers away from the real cause.
+# Every crate must resolve to the same iced_core/iced_widget: two copies make
+# `MouseArea` two types. `ericed` is vendored from ../sofaia, so these versions
+# are bumped in both workspaces together — a mismatch surfaces as a
+# trait-not-implemented error about `Widget`, several layers from the cause.
 [workspace.dependencies]
-# `markdown` is iced's own markdown widget (pulldown-cmark based): inline
-# emphasis, links, inline code, code blocks, lists and tables. Writing that by
-# hand would be most of the chat window's work, and worse than this.
 iced = { version = "0.14.0", features = ["tokio", "markdown"] }
 iced_core = "0.14"
 iced_widget = "0.14"
-# `window::frames()` and `Subscription` live one layer above the widgets, so
-# `ericed::motion` needs these two to be able to say "a frame is a message".
-# Same versions as the rest of iced, for the same reason as above.
+# `ericed::motion` needs the frame subscription, which lives above the widgets.
 iced_runtime = "0.14"
 iced_futures = "0.14"
 tokio = { version = "1.54.1", features = ["fs"] }
@@ -34,7 +25,4 @@ png = "0.18"
 
 ericed = { path = "crates/ericed" }
 odiva-proto = { path = "crates/odiva-proto" }
-# Time labels need the reader's calendar, not just UTC: "昨天 15:42" is a
-# conversion, and the standard library has no timezone. `clock` is the feature
-# that reads the local offset.
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
