@@ -7,6 +7,7 @@
 pub mod acp;
 pub mod engine;
 pub mod error;
+pub mod handoff;
 pub mod harness;
 pub mod ids;
 pub mod prompt;
@@ -23,6 +24,7 @@ pub mod waiting;
 pub use acp::{Stop, Turn, Worker};
 pub use engine::{Engine, Handle};
 pub use error::{Error, Result};
+pub use handoff::Handoff;
 pub use harness::Harness;
 pub use ids::Ids;
 pub use roster::Roster;

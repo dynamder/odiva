@@ -1,8 +1,8 @@
 //! A harness for tests: it speaks ACP v1 on stdio and follows a canned script.
 //!
 //! `ODIVA_FAKE_SCRIPT` picks the script: `chat` says two things and finishes,
-//! `permission` asks for something first, `need` asks for words with a report
-//! envelope, `crash` dies before the handshake.
+//! `slow` takes its time about it, `permission` asks for something first, `need`
+//! asks for words with a report envelope, `crash` dies before the handshake.
 //!
 //! Handlers run on the connection's event loop, so none of them waits for the
 //! peer: a handler either answers, or registers a callback that answers.
@@ -23,6 +23,7 @@ const SESSION: &str = "fake-session";
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Script {
     Chat,
+    Slow,
     Permission,
     Need,
     Crash,
@@ -33,6 +34,7 @@ impl Script {
         match env::var("ODIVA_FAKE_SCRIPT").as_deref() {
             Ok("permission") => Self::Permission,
             Ok("need") => Self::Need,
+            Ok("slow") => Self::Slow,
             Ok("crash") => Self::Crash,
             _ => Self::Chat,
         }
@@ -67,7 +69,7 @@ async fn main() -> Result<()> {
         )
         .on_receive_request(
             async move |_prompt: PromptRequest, responder, connection| {
-                answer(script, responder, connection)
+                answer(script, responder, connection).await
             },
             agent_client_protocol::on_receive_request!(),
         )
@@ -78,11 +80,15 @@ async fn main() -> Result<()> {
         .await
 }
 
-fn answer(
+async fn answer(
     script: Script,
     responder: Responder<PromptResponse, V1>,
     connection: ConnectionTo<Client>,
 ) -> Result<()> {
+    if script == Script::Slow {
+        tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+    }
+
     if script == Script::Need {
         say(
             &connection,

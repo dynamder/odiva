@@ -298,3 +298,55 @@ async fn a_dispatched_task_comes_back_as_a_sentence() {
         Some(&(Side::Assistant, "改完了，README 的命令换成新的了。".to_owned()))
     );
 }
+
+#[tokio::test]
+async fn a_task_in_flight_moves_the_conversation_to_a_work_lane() {
+    let store = scratch("engine-work-lane");
+    let route = Arc::new(Scripted::new(vec![
+        vec![
+            MockResponse::ToolCalls(vec![MockToolCall {
+                name: "task_dispatch".to_owned(),
+                arguments: json!({ "goal": "改 README" }),
+                provider_metadata: None,
+            }]),
+            done(),
+        ],
+        vec![saying("在。"), done()],
+    ]));
+
+    let (engine, handle, mut inbox) =
+        Engine::new(store.clone(), route, PROMPT, harness("slow")).expect("an engine");
+    tokio::spawn(engine.run());
+
+    handle.send(UiMessage::UserSubmittedText {
+        text: "把 README 改一下".to_owned(),
+    });
+    drain(&mut inbox, 3).await;
+
+    handle.send(UiMessage::UserSubmittedText {
+        text: "顺便问一句".to_owned(),
+    });
+    drain(&mut inbox, 4).await;
+
+    let work = store
+        .read(Lane::Work { generation: 0 })
+        .expect("a work file")
+        .expect("a written work lane");
+
+    assert!(work.messages()[0].markdown.contains("【交接】"));
+    assert!(work.messages()[0].markdown.contains("t1"));
+
+    let talk = store
+        .read(Lane::Talk { generation: 0 })
+        .expect("a talk file")
+        .expect("a written talk lane");
+
+    assert_eq!(talk.messages().len(), 3);
+    assert!(
+        talk
+            .messages()
+            .iter()
+            .all(|message| !message.markdown.contains("【交接】")),
+        "the handoff never reaches the public record"
+    );
+}

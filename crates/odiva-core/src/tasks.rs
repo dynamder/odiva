@@ -84,6 +84,14 @@ impl Tasks {
             .get(id)
     }
 
+    /// The tasks that still hold the core in a busy state.
+    pub fn unfinished(&self) -> Vec<Task> {
+        self.ledger
+            .lock()
+            .expect("no panic on the ledger")
+            .unfinished()
+    }
+
     pub fn all(&self) -> Vec<Task> {
         self.ledger
             .lock()

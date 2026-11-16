@@ -31,8 +31,9 @@ pub const TALK: &str = "talk";
 pub enum Lane {
     /// The public record: what the person said, what she said, pointers to work.
     Talk { generation: u32 },
-    /// One busy period's orchestration.
-    Work,
+    /// One busy period's orchestration: rooted at a handoff, sealed when the
+    /// period ends. Earlier periods keep their files.
+    Work { generation: u32 },
     /// A stretch of self-directed work, rooted at the moment it began.
     Roam { started: i64 },
 }
@@ -43,7 +44,9 @@ impl Lane {
             Self::Talk { generation } => {
                 contexts.join(format!("{TALK}.session.{generation}.jsonl"))
             }
-            Self::Work => contexts.join("work.session.jsonl"),
+            Self::Work { generation } => {
+                contexts.join(format!("work.session.{generation}.jsonl"))
+            }
             Self::Roam { started } => {
                 contexts.join("roam").join(format!("{started}.session.jsonl"))
             }
@@ -53,7 +56,7 @@ impl Lane {
     fn stem(self) -> &'static str {
         match self {
             Self::Talk { .. } => TALK,
-            Self::Work => "work",
+            Self::Work { .. } => "work",
             Self::Roam { .. } => "roam",
         }
     }
@@ -97,6 +100,17 @@ impl Log {
 
     pub fn push(&mut self, message: WireMessage) {
         self.messages.push(message);
+    }
+
+    /// Adds a line the core writes about itself — a handoff, a residue. It is
+    /// not a message anyone sent, so it carries no id worth keeping.
+    pub fn push_note(&mut self, from: Side, markdown: impl Into<String>) {
+        self.messages.push(WireMessage::new(
+            0,
+            chrono::Utc::now().timestamp_millis(),
+            from,
+            markdown,
+        ));
     }
 
     /// The conversation as the model reads it.
@@ -274,5 +288,11 @@ impl Store {
                 fixed => Ok((fixed, Log::new(system))),
             },
         }
+    }
+
+    /// Reads a lane exactly as named, with no rotation: a work lane belongs to
+    /// one busy period, and the engine names the period.
+    pub fn exactly(&self, lane: Lane, system: &str) -> Result<Log> {
+        Ok(self.read(lane)?.unwrap_or_else(|| Log::new(system)))
     }
 }

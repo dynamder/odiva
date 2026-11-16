@@ -101,6 +101,8 @@ struct Handoff {
 
 用 `prompt_structured` 让便宜模型产出这个形状，比让它写"简要总结"可靠：**约束由类型承担。**
 
+当前实现先取确定性的版本：话题与意图取最后一条用户消息，承诺取手上的任务，未决取在等人回话的任务（`handoff.rs`）。形状不变，换成一次便宜模型调用只动 `Handoff::of` 的里面。
+
 ### 转换时发生什么
 
 **idle → busy**：定 handoff → 建 work 线（root = handoff）→ talk 线原样留在磁盘 → 换 roster。

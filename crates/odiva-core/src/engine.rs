@@ -45,6 +45,8 @@ pub struct Engine {
     nudges: Option<UnboundedReceiver<Nudge>>,
     waiting: Waiting,
     tasks: Arc<Tasks>,
+    /// The busy period in progress, if any: a work lane's generation.
+    work: Option<u32>,
 }
 
 impl Engine {
@@ -68,6 +70,7 @@ impl Engine {
             nudges: Some(nudges),
             waiting: Waiting::default(),
             tasks,
+            work: None,
         };
 
         Ok((engine, Handle { out: handle }, messages))
@@ -177,13 +180,34 @@ impl Engine {
         inbox: &mut UnboundedReceiver<UiMessage>,
     ) -> Result<()> {
         let said = Said::default();
-        let mut talk = Talk::open(
-            &self.store,
-            &*self.route,
-            &self.prompt,
-            self.roster(&said),
-            said,
-        )?;
+        let busy = self.work_generation();
+        let mut talk = match busy {
+            Some(generation) => {
+                let jobs = self
+                    .tasks
+                    .unfinished()
+                    .iter()
+                    .map(|task| task.line())
+                    .collect();
+
+                Talk::busy(
+                    &self.store,
+                    generation,
+                    &*self.route,
+                    &self.prompt,
+                    self.roster(&said),
+                    said,
+                    jobs,
+                )?
+            }
+            None => Talk::open(
+                &self.store,
+                &*self.route,
+                &self.prompt,
+                self.roster(&said),
+                said,
+            )?,
+        };
 
         if let Some(user) = user {
             talk.note(user)?;
@@ -206,6 +230,30 @@ impl Engine {
 
         drop(running);
         talk.flush()
+    }
+
+    /// The work lane this busy period runs on, opening one if the period is new.
+    fn work_generation(&mut self) -> Option<u32> {
+        if self.tasks.unfinished().is_empty() {
+            self.work = None;
+            return None;
+        }
+
+        if let Some(generation) = self.work {
+            return Some(generation);
+        }
+
+        let newest = self.store.newest("work");
+        let occupied = self
+            .store
+            .read(Lane::Work { generation: newest })
+            .map(|log| log.is_some())
+            .unwrap_or(false);
+
+        let generation = if occupied { newest + 1 } else { newest };
+
+        self.work = Some(generation);
+        Some(generation)
     }
 
     fn roster(&self, said: &Said) -> Roster {

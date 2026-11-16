@@ -163,3 +163,49 @@ async fn a_new_prompt_opens_the_next_generation() {
     assert!(store.path(Lane::Talk { generation: 0 }).exists());
     assert!(store.path(Lane::Talk { generation: 1 }).exists());
 }
+
+#[tokio::test]
+async fn a_busy_activation_writes_two_lanes() {
+    let store = scratch("talk-busy-lanes");
+    let (out, mut inbox, ids) = window();
+    let said = Said::default();
+    let route = Scripted::one(vec![saying("好。"), done()]);
+
+    let mut work = Talk::busy(
+        &store,
+        0,
+        &route,
+        PROMPT,
+        tools(out, &ids, &said),
+        said.clone(),
+        vec!["t1 · 在跑 · 改 README".to_owned()],
+    )
+    .expect("a work lane");
+
+    work.turn(&ids.theirs("顺便问一句")).await.expect("a turn");
+
+    let work_log = store
+        .read(Lane::Work { generation: 0 })
+        .expect("a work file")
+        .expect("a written work lane");
+
+    assert!(work_log.messages()[0].markdown.contains("【交接】"));
+    assert!(work_log.messages()[0].markdown.contains("t1"));
+    assert_eq!(work_log.messages().len(), 3);
+
+    let talk_log = store
+        .read(Lane::Talk { generation: 0 })
+        .expect("a talk file")
+        .expect("a written talk lane");
+
+    assert_eq!(talk_log.messages().len(), 2);
+    assert!(
+        talk_log
+            .messages()
+            .iter()
+            .all(|message| !message.markdown.contains("【交接】")),
+        "the handoff never reaches the public record"
+    );
+
+    assert_eq!(shown(&mut inbox).len(), 1);
+}

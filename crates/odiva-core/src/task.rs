@@ -207,6 +207,20 @@ impl Ledger {
             .count()
     }
 
+    /// Everything still on the table: running, asking, or waiting for a slot.
+    pub fn unfinished(&self) -> Vec<Task> {
+        self.tasks
+            .values()
+            .filter(|task| {
+                matches!(
+                    task.status,
+                    Status::OnHarness | Status::OnInstruction | Status::OnSlot
+                )
+            })
+            .cloned()
+            .collect()
+    }
+
     pub fn queued(&self) -> Option<String> {
         self.tasks
             .values()
