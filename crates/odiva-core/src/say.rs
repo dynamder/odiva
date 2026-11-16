@@ -43,6 +43,13 @@ impl Said {
             .push(message);
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.messages
+            .lock()
+            .expect("no panic while recording")
+            .is_empty()
+    }
+
     /// Everything said since the last drain, oldest first.
     pub fn drain(&self) -> Vec<WireMessage> {
         std::mem::take(&mut *self.messages.lock().expect("no panic while recording"))

@@ -12,6 +12,14 @@ publish = false
 # `MouseArea` two types. `ericed` is vendored from ../sofaia, so these versions
 # are bumped in both workspaces together — a mismatch surfaces as a
 # trait-not-implemented error about `Widget`, several layers from the cause.
+# MSVC's link.exe prints its import-library line to stdout whenever a link
+# produces one, and rustc reports any linker stdout as `linker_messages`. It is
+# not a diagnostic, so it is allowed everywhere rather than per crate; the
+# `unknown_lints` entry keeps the 1.88 MSRV (which has no such lint) quiet.
+[workspace.lints.rust]
+linker_messages = "allow"
+unknown_lints = "allow"
+
 [workspace.dependencies]
 iced = { version = "0.14.0", features = ["tokio", "markdown"] }
 iced_core = "0.14"

@@ -12,6 +12,7 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use crate::error::Result;
 use crate::harness::Harness;
 use crate::ids::Ids;
+use crate::journal::Journal;
 use crate::roster::Roster;
 use crate::route::Route;
 use crate::say::{Said, Say};
@@ -59,6 +60,8 @@ pub struct Engine {
     work: Option<u32>,
     /// Whether she asked to be idle until something happens.
     parked: Parked,
+    /// Where the core writes down what it did.
+    journal: Journal,
 }
 
 impl Engine {
@@ -71,6 +74,7 @@ impl Engine {
         let (out, messages) = unbounded_channel();
         let (handle, inbox) = unbounded_channel();
         let (tasks, nudges) = Tasks::new(store.tasks(), harness, crate::tasks::SLOTS)?;
+        let journal = Journal::new(store.root().join("odiva.log"));
 
         let engine = Self {
             store,
@@ -84,6 +88,7 @@ impl Engine {
             tasks,
             work: None,
             parked: Parked::default(),
+            journal,
         };
 
         Ok((engine, Handle { out: handle }, messages))
@@ -143,6 +148,8 @@ impl Engine {
 
     /// Something the person said.
     async fn turn(&mut self, text: String, inbox: &mut UnboundedReceiver<UiMessage>) {
+        self.journal.line(format!("对方：{text}"));
+
         let user = self.ids.theirs(text);
 
         self.emit(CoreMessage::MessageAppended {
@@ -162,6 +169,9 @@ impl Engine {
         let Ok(task) = self.tasks.get(id) else {
             return;
         };
+
+        self.journal
+            .line(format!("任务 {}：{}", task.id, task.line()));
 
         if let crate::task::Status::Failed(reason) = &task.status {
             self.emit(CoreMessage::CoreFailed {
@@ -192,6 +202,7 @@ impl Engine {
         if let Err(error) = outcome {
             let note = format!("这一轮没跑完：{error}");
 
+            self.journal.line(format!("失败：{error}"));
             self.emit(CoreMessage::CoreFailed { note: note.clone() });
             eprintln!("odiva: {note}");
         }
@@ -253,7 +264,16 @@ impl Engine {
         }
 
         drop(running);
+
+        let spoke = talk.spoke();
         talk.flush()?;
+
+        if !spoke {
+            self.journal.line(format!(
+                "她没说话；模型的原话：{}",
+                talk.monologue().unwrap_or_else(|| "（空）".to_owned())
+            ));
+        }
 
         if talk.used() * 100 >= CONTEXT_WINDOW * COMPACT_AT {
             talk.compact(KEEP)?;

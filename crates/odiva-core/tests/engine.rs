@@ -482,3 +482,26 @@ async fn a_task_that_dies_is_never_silent() {
     let note = notice.expect("a dead worker reaches the window, not just the log");
     assert!(note.contains("t1"), "the notice names the task: {note}");
 }
+
+#[tokio::test]
+async fn a_turn_that_says_nothing_is_written_down() {
+    let store = scratch("engine-journal");
+    let (handle, mut inbox) = scripted(vec![vec![done()]], &store);
+
+    handle.send(UiMessage::UserSubmittedText {
+        text: "在吗".to_owned(),
+    });
+    drain(&mut inbox, 3).await;
+
+    let log = std::fs::read_to_string(store.root().join("odiva.log")).expect("a journal");
+
+    assert!(log.contains("对方：在吗"), "the log has the turn in it: {log}");
+    assert!(
+        log.contains("她没说话"),
+        "silence is a fact worth writing down: {log}"
+    );
+    assert!(
+        log.contains("好。"),
+        "and the words the model did produce are kept: {log}"
+    );
+}

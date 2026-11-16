@@ -1,13 +1,9 @@
-// MSVC's link.exe prints its import-library line to stdout; rustc 1.97 reports any
-// linker stdout as `linker_messages`. That line is not a diagnostic.
-#![allow(unknown_lints, linker_messages)]
-
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use iced::Task;
 use odiva::App;
-use odiva_core::{Engine, Harness, Model, Route, Store, prompt};
+use odiva_core::{Engine, Harness, Journal, Model, Route, Store, prompt};
 use yoagent::provider::ModelConfig;
 
 fn main() -> iced::Result {
@@ -16,12 +12,25 @@ fn main() -> iced::Result {
         .build()
         .expect("a tokio runtime");
 
-    let store = Store::new(data_root());
+    let root = data_root();
+    let journal = Journal::new(root.join("odiva.log"));
+    let harness = Harness::new(std::env::var("ODIVA_HARNESS").unwrap_or_else(|_| "dsh".to_owned()));
+
+    for line in [
+        format!("启动：数据目录 {}", root.display()),
+        format!("启动：模型 deepseek-flash，key {}", key_state()),
+        format!("启动：harness {}", harness_name()),
+        format!("启动：日志 {}", journal.path().display()),
+    ] {
+        println!("odiva: {line}");
+        journal.line(&line);
+    }
+
+    let store = Store::new(root);
     let route: Arc<dyn Route> = Arc::new(Model::new(ModelConfig::deepseek(
         "deepseek-flash",
         "DeepSeek Flash",
     )));
-    let harness = Harness::new(std::env::var("ODIVA_HARNESS").unwrap_or_else(|_| "dsh".to_owned()));
     let (engine, handle, messages) =
         Engine::new(store, route, prompt::idle(), harness).expect("the engine starts");
 
@@ -45,6 +54,17 @@ fn main() -> iced::Result {
     .subscription(App::subscription)
     .theme(App::theme)
     .run()
+}
+
+fn key_state() -> &'static str {
+    match std::env::var_os("DEEPSEEK_API_KEY") {
+        Some(key) if !key.is_empty() => "有",
+        _ => "没有（设 DEEPSEEK_API_KEY）",
+    }
+}
+
+fn harness_name() -> String {
+    std::env::var("ODIVA_HARNESS").unwrap_or_else(|_| "dsh".to_owned())
 }
 
 fn data_root() -> PathBuf {

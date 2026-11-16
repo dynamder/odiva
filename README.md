@@ -44,6 +44,11 @@ The screenshots in `target/` are the design review loop: each one is a script of
 `CoreMessage`s replayed into a fresh window, so a picture that cannot be produced
 means the protocol stopped being enough.
 
+Both executables write `$ODIVA_HOME/odiva.log` (`./.odiva/odiva.log` by default):
+what was asked, whether she spoke, what the model said when she did not, and how
+tasks ended. A window started from a shortcut has no terminal, and silence on
+screen means two different things until someone writes it down.
+
 ## State
 
 The window is connected to the core. `main` builds the engine and spawns it;

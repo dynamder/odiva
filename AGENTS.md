@@ -8,7 +8,7 @@ Try you best to keep everything single-sourced, whatever it is code or doc.
 
 Remember to update the doc to reflect the current codebase if you make some changes.
 
-When error-handling, every error should be exposed.
+When error-handling, every error should be exposed properly to the user.
 
 ## Development
 

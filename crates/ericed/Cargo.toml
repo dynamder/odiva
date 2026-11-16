@@ -18,3 +18,6 @@ iced_widget.workspace = true
 # not a widget one.
 iced_runtime.workspace = true
 iced_futures.workspace = true
+
+[lints]
+workspace = true

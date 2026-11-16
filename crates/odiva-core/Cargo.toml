@@ -19,3 +19,6 @@ yoagent.workspace = true
 
 [dev-dependencies]
 async-trait = "0.1.92"
+
+[lints]
+workspace = true

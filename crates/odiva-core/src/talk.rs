@@ -12,6 +12,7 @@
 
 use odiva_proto::{Side, WireMessage};
 use yoagent::Agent;
+use yoagent::types::{AgentMessage, Content, Message};
 
 use crate::error::Result;
 use crate::handoff::Handoff;
@@ -91,6 +92,35 @@ impl Talk {
 
     pub fn lane(&self) -> Lane {
         self.lane
+    }
+
+    /// Whether she said anything during this activation.
+    pub fn spoke(&self) -> bool {
+        !self.said.is_empty()
+    }
+
+    /// What the model said in its own voice, tools aside.
+    ///
+    /// A turn that ends without a `say` still produced something, and that text
+    /// is the difference between "she chose silence" and "the tool was ignored".
+    pub fn monologue(&self) -> Option<String> {
+        let said = self.agent.messages().iter().rev().find_map(|message| {
+            let AgentMessage::Llm(Message::Assistant { content, .. }) = message else {
+                return None;
+            };
+
+            let text: String = content
+                .iter()
+                .filter_map(|block| match block {
+                    Content::Text { text } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect();
+
+            (!text.trim().is_empty()).then_some(text)
+        })?;
+
+        Some(said)
     }
 
     /// Records what the person said, before anything is run.
