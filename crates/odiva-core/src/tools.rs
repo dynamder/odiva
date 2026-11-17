@@ -207,16 +207,16 @@ impl Answer {
 #[async_trait::async_trait]
 impl AgentTool for Answer {
     fn name(&self) -> &str {
-        "task_answer"
+        "task_instruct"
     }
 
     fn label(&self) -> &str {
-        "Answer a task"
+        "Instruct a task"
     }
 
     fn description(&self) -> &str {
-        "Answer a task that is waiting for words. It restarts with its brief, its last words \
-         and this line."
+        "Give a task that is waiting for words its next instruction. It restarts with its brief, \
+         its last words and this line."
     }
 
     fn parameters_schema(&self) -> Value {

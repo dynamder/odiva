@@ -3,12 +3,13 @@
 use std::sync::Arc;
 
 use kameo::actor::ActorRef;
-use odiva_harness::{Ask, Decision, Permission, Refuse};
+use odiva_harness::{Ask, Decision, Permission};
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
 use crate::harness::Harness;
 use crate::odiva::{Event, Odiva};
+use crate::policy::{Roots, Verdict, classify};
 use crate::task::{Origin, Task};
 
 /// A run in flight: its identity, and the way to stop it.
@@ -22,13 +23,12 @@ pub fn start(id: u64, task: &Task, harness: &Harness, odiva: ActorRef<Odiva>) ->
     let prompt = crate::brief::prompt(&task.brief);
     let cancel = CancellationToken::new();
 
-    let permission: Arc<dyn Permission> = match task.origin {
-        Origin::User => Arc::new(Asks {
-            task: task.id.clone(),
-            odiva: odiva.clone(),
-        }),
-        Origin::Interest => Arc::new(Refuse),
-    };
+    let permission: Arc<dyn Permission> = Arc::new(Policy {
+        task: task.id.clone(),
+        roots: Roots::new(&task.cwd),
+        origin: task.origin,
+        odiva: odiva.clone(),
+    });
 
     let task_id = task.id.clone();
     let token = cancel.clone();
@@ -51,15 +51,30 @@ pub fn start(id: u64, task: &Task, harness: &Harness, odiva: ActorRef<Odiva>) ->
     Run { id, cancel }
 }
 
-/// A worker's question, carried to whoever can answer it.
-struct Asks {
+/// The policy, and the person behind it.
+struct Policy {
     task: String,
+    roots: Roots,
+    origin: Origin,
     odiva: ActorRef<Odiva>,
 }
 
 #[async_trait::async_trait]
-impl Permission for Asks {
+impl Permission for Policy {
     async fn decide(&self, ask: &Ask) -> Decision {
+        match classify(ask, &self.roots, self.origin) {
+            Verdict::Allow => Decision::Allow,
+            Verdict::Deny(_) => Decision::Refuse,
+            Verdict::AgentMayDecide | Verdict::AskUser(_) => self.ask(ask).await,
+        }
+    }
+}
+
+impl Policy {
+    /// Carries the question to whoever can answer it. While she is inside a
+    /// turn, the answer waits for that turn to end; the worker waits too, which
+    /// is what "stopped on a question" means.
+    async fn ask(&self, ask: &Ask) -> Decision {
         let (answer, told) = oneshot::channel();
 
         let sent = self

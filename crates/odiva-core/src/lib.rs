@@ -16,6 +16,7 @@ pub mod ledger;
 pub mod line;
 pub mod idle;
 pub mod odiva;
+pub mod policy;
 pub mod prompt;
 pub mod roster;
 pub mod route;
