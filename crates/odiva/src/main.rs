@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 
 use iced::Task;
 use odiva::App;
-use odiva_core::{Harness, Journal, Model, Route, Store, prompt, start_with};
+use odiva_core::{Journal, Model, Route, Store, prompt, start_with};
 use yoagent::provider::ModelConfig;
 
 fn main() -> iced::Result {
@@ -14,7 +14,7 @@ fn main() -> iced::Result {
 
     let root = data_root();
     let journal = Journal::new(root.join("odiva.log"));
-    let harness = Harness::new(std::env::var("ODIVA_HARNESS").unwrap_or_else(|_| "dsh".to_owned()));
+    let harness = odiva_core::configure::harness();
 
     listen(journal.clone());
 

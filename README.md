@@ -40,7 +40,16 @@ cargo run -p odiva                # open the window, connected to the core
 ```
 
 The window owns no conversation: `ODIVA_HOME` says where the core keeps its lines
-(defaults to `./.odiva`), and `ODIVA_HARNESS` names the harness program it may start (defaults to `dsh`).
+(defaults to `./.odiva`). The harness it starts is `ODIVA_HARNESS` + `ODIVA_HARNESS_ARGS`
+(defaults to `dsh --profile acp`), with `ODIVA_DSH_HOME` / `ODIVA_DSH_PERMISSION_MODE`
+for dsh itself.
+
+Before trusting the wiring, ask it one question that costs nothing:
+
+```sh
+cargo run -p odiva-core --example doctor            # handshake + session/new only
+cargo run -p odiva-core --example doctor -- D:\work
+```
 
 The screenshots in `target/` are the design review loop: each one is a script of
 `CoreMessage`s replayed into a fresh window, so a picture that cannot be produced

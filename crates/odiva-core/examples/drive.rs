@@ -11,7 +11,7 @@ use std::io::{BufRead, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use odiva_core::{Harness, Model, Route, Store, prompt, start_with};
+use odiva_core::{Model, Route, Store, prompt, start_with};
 use odiva_proto::{CoreHandle, CoreMessage, Side, UiMessage};
 use yoagent::provider::ModelConfig;
 
@@ -27,7 +27,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "deepseek-flash",
         "DeepSeek Flash",
     )));
-    let harness = Harness::new(std::env::var("ODIVA_HARNESS").unwrap_or_else(|_| "dsh".to_owned()));
+    let harness = odiva_core::configure::harness();
 
     println!("odiva: 数据目录 {}", store.root().display());
     println!(

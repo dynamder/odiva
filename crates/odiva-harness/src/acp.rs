@@ -8,7 +8,7 @@
 //! not for a `PromptResponse`.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
 
@@ -22,6 +22,15 @@ use agent_client_protocol::v1::schema::{
 };
 use agent_client_protocol::{ByteStreams, Client, on_receive_request};
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
+
+/// What a harness can do, without spending a turn on it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Probe {
+    /// The session `session/new` handed out.
+    pub session: String,
+    /// Whether it advertises `session/load`.
+    pub load_session: bool,
+}
 
 /// What a harness said in one turn, and why it stopped.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -172,9 +181,25 @@ impl Worker {
     /// A package manager installs CLIs as `.cmd` on Windows, and the system's
     /// process spawner will not run one directly; going through `cmd /C` is the
     /// only way to start what the user configured.
+    fn spawn(&self) -> crate::Result<tokio::process::Child> {
+        self.program_command()
+            .args(&self.args)
+            .current_dir(&self.cwd)
+            .envs(&self.env)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .kill_on_drop(true)
+            .spawn()
+            .map_err(|error| {
+                crate::Error::Harness(format!("cannot start {}: {error}", self.program.display()))
+            })
+    }
+
     fn program_command(&self) -> tokio::process::Command {
-        let shim = self
-            .program
+        let program = resolve(&self.program);
+
+        let shim = program
             .extension()
             .and_then(|extension| extension.to_str())
             .is_some_and(|extension| {
@@ -182,11 +207,11 @@ impl Worker {
             });
 
         if !shim {
-            return tokio::process::Command::new(&self.program);
+            return tokio::process::Command::new(program);
         }
 
         let mut command = tokio::process::Command::new("cmd");
-        command.arg("/C").arg(&self.program);
+        command.arg("/C").arg(program);
         command
     }
 
@@ -201,19 +226,7 @@ impl Worker {
         prompt: &str,
         permission: Arc<dyn Permission>,
     ) -> crate::Result<Turn> {
-        let mut child = self
-            .program_command()
-            .args(&self.args)
-            .current_dir(&self.cwd)
-            .envs(&self.env)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
-            .kill_on_drop(true)
-            .spawn()
-            .map_err(|error| {
-                crate::Error::Harness(format!("cannot start {}: {error}", self.program.display()))
-            })?;
+        let mut child = self.spawn()?;
 
         let outgoing = child
             .stdin
@@ -314,6 +327,44 @@ impl Worker {
             .map_err(Into::into)
     }
 
+    /// Starts the harness and asks only what it can do: no model, no prompt.
+    ///
+    /// This is the check a person runs before trusting the wiring — a handshake
+    /// and a session, then the process is dropped.
+    pub async fn probe(&self) -> crate::Result<Probe> {
+        let mut child = self.spawn()?;
+
+        let outgoing = child.stdin.take().expect("stdin is piped").compat_write();
+        let incoming = child.stdout.take().expect("stdout is piped").compat();
+        let cwd = self.cwd.clone();
+
+        Client
+            .v1()
+            .connect_with(ByteStreams::new(outgoing, incoming), async move |connection| {
+                let _child = child;
+
+                let initialize = connection
+                    .send_request(InitializeRequest::new(ProtocolVersion::V1))
+                    .block_task()
+                    .await?;
+
+                let load_session = initialize.agent_capabilities.load_session;
+
+                connection
+                    .build_session(cwd)
+                    .block_task()
+                    .run_until(async move |setup| {
+                        Ok::<Probe, agent_client_protocol::Error>(Probe {
+                            session: setup.response.session_id.0.to_string(),
+                            load_session,
+                        })
+                    })
+                    .await
+            })
+            .await
+            .map_err(Into::into)
+    }
+
     /// For callers that only ever refuse.
     pub async fn talk_refusing(&self, prompt: &str) -> crate::Result<Turn> {
         self.talk(prompt, Arc::new(Refuse)).await
@@ -332,6 +383,45 @@ impl Worker {
             _ = cancel.cancelled() => Err(crate::Error::Harness("这一轮被叫停".to_owned())),
         }
     }
+}
+
+/// The path to run, with Windows' launcher rules applied.
+///
+/// A package manager installs `dsh` as `dsh.cmd`, and `Command::new("dsh")` does
+/// not try `PATHEXT`. So a bare name is looked up on `PATH` for an executable
+/// this process can actually start.
+fn resolve(program: &Path) -> PathBuf {
+    if program.extension().is_some() {
+        return program.to_path_buf();
+    }
+
+    let Some(paths) = std::env::var_os("PATH") else {
+        return program.to_path_buf();
+    };
+
+    let extensions: &[&str] = if cfg!(windows) {
+        &["exe", "cmd", "bat"]
+    } else {
+        &[]
+    };
+
+    for directory in std::env::split_paths(&paths) {
+        for extension in extensions {
+            let candidate = directory.join(format!("{}.{extension}", program.display()));
+
+            if candidate.is_file() {
+                return candidate;
+            }
+        }
+
+        let bare = directory.join(program);
+
+        if bare.is_file() {
+            return bare;
+        }
+    }
+
+    program.to_path_buf()
 }
 
 /// Answers by name, never by position: the narrow form of whatever was decided,

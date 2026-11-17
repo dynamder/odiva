@@ -19,7 +19,11 @@ pub struct Run {
 }
 
 pub fn start(id: u64, task: &Task, harness: &Harness, odiva: ActorRef<Odiva>) -> Run {
-    let worker = harness.worker(&task.cwd);
+    let worker = harness
+        .worker(&task.cwd)
+        .env("ODIVA_TASK_DIR", task.cwd.display().to_string())
+        .env("ODIVA_TASK_ID", task.id.clone());
+
     let prompt = crate::brief::prompt(&task.brief);
     let cancel = CancellationToken::new();
 

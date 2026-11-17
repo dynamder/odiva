@@ -144,6 +144,12 @@ impl AgentTool for Accept {
         let args: AcceptArgs = serde_json::from_value(params)
             .map_err(|error| ToolError::InvalidArgs(error.to_string()))?;
 
+        if !std::path::Path::new(&args.workspace).is_absolute() {
+            return Err(ToolError::InvalidArgs(
+                "workspace 要写绝对路径：那是 worker 的沙箱边界".to_owned(),
+            ));
+        }
+
         let id = self
             .records
             .ask(ledger::Reserve {

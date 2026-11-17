@@ -68,7 +68,13 @@ core 只解析 `status`；缺信封按 `done` 处理并记诊断，永不因为�
 派活时写 brief：目标 + 相关文件 + 约束。harness 看不到任何对话，所以 brief 必须自包含。
 `accept_task` 的参数就是交接，`task_dispatch` 的参数就是 brief——两者的形状都由类型保证。
 
-环境变量：`ODIVA_TASK_DIR`、`ODIVA_TASK_ID`、`ODIVA_HARNESS`，以及 `DSH_HOME`、`DSH_PERMISSION_MODE`。
+worker 自己的环境：`ODIVA_TASK_DIR`、`ODIVA_TASK_ID`，以及 harness 侧的两个开关
+`DSH_HOME`（默认用用户自己的 `~/.dsh`，可用 `ODIVA_DSH_HOME` 改）与 `DSH_PERMISSION_MODE`
+（默认 `workspace-write`）。怎么启动它由 `ODIVA_HARNESS` / `ODIVA_HARNESS_ARGS` 决定，默认
+`dsh --profile acp`。
+
+`cargo run -p odiva-core --example doctor` 只做握手 + `session/new`，不花一个 token，就能确认
+程序解析、`.cmd` 启动器、协议、目录都对。
 
 ## 暂停与恢复
 

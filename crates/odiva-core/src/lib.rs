@@ -7,6 +7,7 @@
 pub mod asking;
 pub mod brief;
 pub mod budget;
+pub mod configure;
 pub mod error;
 pub mod halt;
 pub mod handoff;
