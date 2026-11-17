@@ -73,16 +73,22 @@ worker 自己的环境：`ODIVA_TASK_DIR`、`ODIVA_TASK_ID`，以及 harness 侧
 （默认 `workspace-write`）。怎么启动它由 `ODIVA_HARNESS` / `ODIVA_HARNESS_ARGS` 决定，默认
 `dsh --profile acp`。
 
+dsh 每次启动都要往 home 里写 `profiles/<name>/cordis.yml`，所以写不进去的 home 就是死的 harness。
+`ODIVA_DSH_HOME` 是显式决定，按原样用；而继承来的 `DSH_HOME` 和默认的 `~/.dsh` 只试一次，
+写不进去就换成 `<数据目录>/harness-home`（数据目录同 `ODIVA_HOME`），日志说明换了哪里。
+凭据跟着 home 走（dsh 的 `dsh-credentials-local` 读 `$DSH_HOME/.credentials.yaml`），所以
+新 home 里没有 key 时日志会提示把 `~/.dsh/.credentials.yaml` 复制过去——odiva 自己不动密钥。
+
 `cargo run -p odiva-core --example doctor` 只做握手 + `session/new`，不花一个 token，就能确认
 程序解析、`.cmd` 启动器、协议、目录都对。
 
-能跑起来却拿不到答案的三种情形，odiva 在启动时就把原因写进日志（`configure::diagnostics`）：
-`DSH_HOME` 不可写（dsh 每次启动都写 `cordis.yml`，会在握手前退出）、`HTTPS_PROXY` /
-`HTTP_PROXY` / `ALL_PROXY` 指着一个没人应答的端口（brain 走 `reqwest`，它自己读这些变量，
-于是请求打到一个本地死端口，报出来是"tcp connect error 127.0.0.1:7900"，看着像断网），
-以及 `dsh` 解析到了桌面版的启动器。最后一种是安装桌面版之后最容易踩的：桌面版把自己放在
-`PATH` 前面，那个启动器会把 profile 起在桌面应用自己的沙箱里，`~/.dsh` 因此只读，握手前就 EPERM。
-把 `ODIVA_HARNESS` 指到独立的 CLI，日志里会直接给出它的路径。
+能跑起来却拿不到答案的两种情形，odiva 在启动时就把原因写进日志（`configure::diagnostics`）：
+`DSH_HOME` 写不进去（就地回退，并说明凭据要放哪里）、`HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY`
+指着一个没人应答的端口（brain 走 `reqwest`，它自己读这些变量，于是请求打到一个本地死端口，
+报出来是"tcp connect error 127.0.0.1:7900"，看着像断网）。
+
+`dsh` 这个名字在装了桌面版的机器上可能解析到桌面应用自带的 CLI，而不是独立安装的那个；
+两个都能跑 ACP，启动日志里 `启动：harness dsh → <真实路径>` 会把将要执行的写出来，混用时以此为准。
 
 ## 暂停与恢复
 

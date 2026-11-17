@@ -3,9 +3,13 @@
 //!
 //! `ODIVA_HARNESS` names the program, `ODIVA_HARNESS_ARGS` its arguments (space
 //! separated). The default is dsh in its ACP profile — the only mode that speaks
-//! the protocol on stdio. `ODIVA_DSH_HOME` moves dsh's own home when the default
-//! one is not writable; `ODIVA_DSH_PERMISSION_MODE` overrides the sandbox
+//! the protocol on stdio. `ODIVA_DSH_PERMISSION_MODE` overrides the sandbox
 //! boundary it starts with.
+//!
+//! dsh writes `profiles/<name>/cordis.yml` into its home on every boot, so a home
+//! that refuses a new file is a dead harness. When the environment's home refuses
+//! one, a home under the data root stands in rather than failing on the first
+//! task; the log says so, and says where the credentials have to go.
 
 use std::env;
 use std::net::{IpAddr, SocketAddr, TcpStream};
@@ -29,122 +33,102 @@ pub fn harness() -> Harness {
         env::var("ODIVA_DSH_PERMISSION_MODE").unwrap_or_else(|_| "workspace-write".to_owned()),
     );
 
-    if let Ok(home) = env::var("ODIVA_DSH_HOME") {
-        harness = harness.env("DSH_HOME", home);
-    }
+    let home = home();
+    let _ = std::fs::create_dir_all(&home.path);
 
-    harness
+    harness.env("DSH_HOME", home.path.display().to_string())
+}
+
+/// Where the core keeps its own files.
+pub fn data_root() -> PathBuf {
+    env::var_os("ODIVA_HOME").map(PathBuf::from).unwrap_or_else(|| {
+        env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join(".odiva")
+    })
 }
 
 /// The facts about this environment that decide whether a turn can run at all.
 ///
-/// Both of them fail before anything reaches the window, so this is where they
-/// are said: a log line naming the cause beats a symptom the user has to guess.
+/// They fail before anything reaches the window, so this is where they are said:
+/// a log line naming the cause beats a symptom the user has to guess.
 pub fn diagnostics() -> Vec<String> {
     let mut lines: Vec<String> = Vec::new();
+    let home = home();
 
-    if let Some(line) = unwritable_home() {
-        lines.push(line);
+    if let Some((refused, from)) = &home.refused {
+        lines.push(format!(
+            "DSH_HOME {} 写不进去（来自 {from}）：dsh 每次启动都要写 profiles/<name>/cordis.yml。改用 {}",
+            refused.display(),
+            home.path.display()
+        ));
 
         if let Some(marks) = spawned_by_dsh() {
             lines.push(format!(
-                "这个 odiva 是从 dsh 里起的（{marks}），带着 dsh 只读的沙箱令牌，它派出的 dsh 也一样：\
-                 换成 dsh 之外的终端（alacritty / 资源管理器）启动"
+                "这个 odiva 是从 dsh 里起的（{marks}），带着 dsh 的只读令牌，它派出的 dsh 也一样：\
+                 换成 dsh 之外的终端（alacritty / 资源管理器）启动会更干净"
+            ));
+        }
+
+        let credentials = refused.join(".credentials.yaml");
+
+        if credentials.is_file() && !home.path.join(".credentials.yaml").is_file() {
+            lines.push(format!(
+                "{} 里没有凭据：worker 调模型时会说没有 key。把 {} 复制过去",
+                home.path.display(),
+                credentials.display()
             ));
         }
     }
 
     lines.extend(proxy());
-    lines.extend(desktop_shim());
 
     lines
 }
 
-/// Whether the harness would run inside the desktop app's own sandbox.
-///
-/// The desktop install puts its launcher on `PATH` ahead of any standalone CLI,
-/// and that launcher boots the profile through the app — with the app's sandbox,
-/// where `~/.dsh` is read-only. So `dsh` on this machine is not a harness: it
-/// fails at the handshake, saying EPERM on `profiles/<name>/cordis.yml`.
-fn desktop_shim() -> Option<String> {
-    let program = env::var("ODIVA_HARNESS").unwrap_or_else(|_| "dsh".to_owned());
-
-    if !program.to_lowercase().contains("dsh") {
-        return None;
-    }
-
-    let found = candidates(Path::new(&program));
-    let shim = found.iter().find(|path| is_desktop(path))?;
-
-    Some(match found.iter().find(|path| !is_desktop(path)) {
-        Some(standalone) => format!(
-            "harness 解析到桌面版的 {}：它在桌面应用自己的沙箱里跑 profile，~/.dsh 只读。\
-             改用独立 CLI：ODIVA_HARNESS={}",
-            shim.display(),
-            standalone.display()
-        ),
-        None => format!(
-            "harness 解析到桌面版的 {}：它在桌面应用自己的沙箱里跑 profile，~/.dsh 只读。\
-             装一个独立的 dsh（npm i -g @deepseek-ai/dsh），或把 ODIVA_DSH_HOME 指到一个可写目录",
-            shim.display()
-        ),
-    })
+/// The home dsh is given, and the one it was refused instead.
+struct Home {
+    path: PathBuf,
+    /// The home the environment named, when it refused a new file.
+    refused: Option<(PathBuf, &'static str)>,
 }
 
-/// A launcher that boots through the desktop host, which is where the sandbox
-/// boundary comes from.
-fn is_desktop(path: &Path) -> bool {
-    std::fs::read_to_string(path).is_ok_and(|text| text.contains("dsh-desktop-host"))
-}
-
-/// A startup warning when dsh's own home would stop it from booting.
-///
-/// dsh writes `profiles/<name>/cordis.yml` on every boot, so a read-only home
-/// fails before the handshake — with nothing in our log to say why.
-fn unwritable_home() -> Option<String> {
-    let program = env::var("ODIVA_HARNESS").unwrap_or_else(|_| "dsh".to_owned());
-
-    if !program.to_lowercase().contains("dsh") {
-        return None;
-    }
-
-    let (home, source) = dsh_home()?;
-
-    let target = if home.is_dir() {
-        home.clone()
-    } else {
-        home.parent()?.to_path_buf()
+fn home() -> Home {
+    let Some((named, from)) = dsh_home() else {
+        return Home {
+            path: fallback(),
+            refused: None,
+        };
     };
 
-    let error = probe(&target).err()?;
+    if probe(&writable_target(&named)).is_ok() {
+        return Home {
+            path: named,
+            refused: None,
+        };
+    }
 
-    let mut line = format!(
-        "DSH_HOME {} 不可写（{error}，来自 {source}）：dsh 每次启动都要写 profiles/<name>/cordis.yml，\
-         会在握手前退出。把 ODIVA_DSH_HOME 指到一个可写目录",
-        home.display()
-    );
-
-    line.push_str(&match writable_elsewhere() {
-        Some(where_) => format!(
-            "；{where_} 写得进去，所以被拦的是这个路径，不是进程：多半是第三方防护（火绒 / Defender）\
-             或组策略按路径拦截，把 odiva 和它派出的 dsh 加进信任"
-        ),
-        None => "；工作目录也写不了，是这个进程整体受限".to_owned(),
-    });
-
-    Some(line)
+    Home {
+        path: fallback(),
+        refused: Some((named, from)),
+    }
 }
 
-/// A place this process can write that is not the harness home, if there is one.
-fn writable_elsewhere() -> Option<String> {
-    let here = std::env::current_dir().ok()?;
+/// The program the harness is, as `PATH` resolves it.
+///
+/// A bare `dsh` may be the desktop app's bundled CLI rather than a standalone
+/// one, so the startup log names the file that will actually run.
+pub fn resolved() -> PathBuf {
+    let program = env::var("ODIVA_HARNESS").unwrap_or_else(|_| "dsh".to_owned());
 
-    probe(&here).ok()?;
-
-    Some(here.display().to_string())
+    candidates(Path::new(&program))
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| PathBuf::from(program))
 }
 
-/// Where dsh keeps its home, and which variable said so.
+/// dsh's own knob is honoured as given: moving it is the caller's decision, and
+/// second-guessing it would hide a wrong path behind a home that happens to work.
 fn dsh_home() -> Option<(PathBuf, &'static str)> {
     if let Some(path) = env::var_os("ODIVA_DSH_HOME") {
         return Some((PathBuf::from(path), "ODIVA_DSH_HOME"));
@@ -154,7 +138,25 @@ fn dsh_home() -> Option<(PathBuf, &'static str)> {
         return Some((PathBuf::from(path), "DSH_HOME"));
     }
 
-    std::env::var_os("USERPROFILE").map(|profile| (PathBuf::from(profile).join(".dsh"), "默认"))
+    env::var_os("USERPROFILE").map(|profile| (PathBuf::from(profile).join(".dsh"), "默认"))
+}
+
+/// Where a home that cannot be written is replaced. Beside the core's own files,
+/// because that is the one place this process is known to write.
+fn fallback() -> PathBuf {
+    data_root().join("harness-home")
+}
+
+/// The directory a probe writes into: the home itself, or the place it would be
+/// created in.
+fn writable_target(home: &Path) -> PathBuf {
+    if home.is_dir() {
+        return home.to_path_buf();
+    }
+
+    home.parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| home.to_path_buf())
 }
 
 /// Whether a directory takes a new file. The probe is removed again.

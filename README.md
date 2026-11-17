@@ -44,10 +44,14 @@ The window owns no conversation: `ODIVA_HOME` says where the core keeps its line
 (defaults to `dsh --profile acp`), with `ODIVA_DSH_HOME` / `ODIVA_DSH_PERMISSION_MODE`
 for dsh itself.
 
-A bare `dsh` is whatever `PATH` finds first, and on a machine with the desktop app
-installed that is the desktop launcher, which boots the profile inside the app's own
-sandbox — where `~/.dsh` is read-only, so every handshake dies with EPERM. Point
-`ODIVA_HARNESS` at a standalone CLI instead; `doctor` says so when it sees this.
+A bare `dsh` is whatever `PATH` finds first — on a machine with the desktop app
+installed that may be the app's bundled CLI rather than a standalone one. Either one
+speaks ACP; the startup log names the file that will actually run.
+
+dsh writes `profiles/<name>/cordis.yml` into its home on every boot. If the home the
+environment names refuses a file, odiva falls back to `<data dir>/harness-home` and
+logs it; copy `.credentials.yaml` there — credentials live in the harness home, so a
+fresh one has no key.
 
 Before trusting the wiring, ask it one question that costs nothing:
 

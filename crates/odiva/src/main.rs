@@ -1,4 +1,3 @@
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use iced::Task;
@@ -12,7 +11,7 @@ fn main() -> iced::Result {
         .build()
         .expect("a tokio runtime");
 
-    let root = data_root();
+    let root = odiva_core::configure::data_root();
     let journal = Journal::new(root.join("odiva.log"));
     let harness = odiva_core::configure::harness();
 
@@ -26,7 +25,11 @@ fn main() -> iced::Result {
     for line in [
         format!("启动：数据目录 {}", root.display()),
         format!("启动：模型 deepseek-flash，key {}", key_state()),
-        format!("启动：harness {}", harness_name()),
+        format!(
+            "启动：harness {} → {}",
+            harness_name(),
+            odiva_core::configure::resolved().display()
+        ),
         format!("启动：日志 {}（ODIVA_LOG=debug 逐条记）", journal.path().display()),
     ] {
         println!("odiva: {line}");
@@ -141,14 +144,4 @@ fn key_state() -> &'static str {
 
 fn harness_name() -> String {
     std::env::var("ODIVA_HARNESS").unwrap_or_else(|_| "dsh".to_owned())
-}
-
-fn data_root() -> PathBuf {
-    std::env::var_os("ODIVA_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            std::env::current_dir()
-                .expect("a current directory")
-                .join(".odiva")
-        })
 }
