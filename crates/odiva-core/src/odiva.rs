@@ -526,6 +526,7 @@ impl Odiva {
         tools.extend(tools::roster(
             self.records.clone(),
             ctx.actor_ref().clone(),
+            if busy { Mode::Busy } else { Mode::Idle },
         ));
 
         if busy {

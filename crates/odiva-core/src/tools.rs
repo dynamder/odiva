@@ -10,6 +10,7 @@ use yoagent::types::{AgentTool, Content, ToolContext, ToolError, ToolResult};
 
 use crate::brief;
 use crate::ledger::{self, Records};
+use crate::line::Mode;
 use crate::odiva::{self, Odiva};
 use crate::task::{Origin, Status, Task};
 
@@ -365,17 +366,28 @@ impl AgentTool for Permit {
     }
 }
 
-pub fn roster(records: ActorRef<Records>, odiva: ActorRef<Odiva>) -> Vec<Box<dyn AgentTool>> {
-    vec![
-        Box::new(Dispatch::new(
-            records.clone(),
-            odiva.clone(),
-            Origin::User,
-        )),
+/// What each state may do. Idle watches the work; busy runs it.
+pub fn roster(
+    records: ActorRef<Records>,
+    odiva: ActorRef<Odiva>,
+    mode: Mode,
+) -> Vec<Box<dyn AgentTool>> {
+    let origin = match mode {
+        Mode::Idle => Origin::Interest,
+        Mode::Busy => Origin::User,
+    };
+
+    let mut tools: Vec<Box<dyn AgentTool>> = vec![
+        Box::new(Dispatch::new(records.clone(), odiva.clone(), origin)),
         Box::new(List::new(records.clone())),
         Box::new(Read::new(records.clone())),
-        Box::new(Answer::new(records.clone(), odiva.clone())),
-        Box::new(Cancel::new(odiva.clone())),
-        Box::new(Permit::new(odiva)),
-    ]
+    ];
+
+    if mode == Mode::Busy {
+        tools.push(Box::new(Answer::new(records.clone(), odiva.clone())));
+        tools.push(Box::new(Cancel::new(odiva.clone())));
+        tools.push(Box::new(Permit::new(odiva)));
+    }
+
+    tools
 }
