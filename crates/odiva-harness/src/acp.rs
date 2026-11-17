@@ -8,9 +8,10 @@
 //! not for a `PromptResponse`.
 
 use std::collections::BTreeMap;
+use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::process::Stdio;
-use std::sync::Arc;
 
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::util::MatchDispatch;
@@ -22,6 +23,38 @@ use agent_client_protocol::v1::schema::{
 };
 use agent_client_protocol::{ByteStreams, Client, on_receive_request};
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
+
+/// The last lines a harness wrote to its stderr.
+///
+/// A windowed app has no terminal, so a harness that dies on startup would only
+/// say "transport closed". Keeping its own words turns that into a diagnosis.
+#[derive(Clone, Default)]
+struct Tail(Arc<Mutex<VecDeque<String>>>);
+
+const TAIL_LINES: usize = 40;
+
+impl Tail {
+    fn push(&self, line: String) {
+        let mut lines = self.0.lock().expect("no panic on the tail");
+
+        if lines.len() == TAIL_LINES {
+            lines.pop_front();
+        }
+
+        lines.push_back(line);
+    }
+
+    fn render(&self) -> String {
+        let lines = self.0.lock().expect("no panic on the tail");
+        lines.iter().cloned().collect::<Vec<_>>().join("\n")
+    }
+}
+
+/// A started child, and the reader that keeps its last words.
+struct Spawned {
+    child: tokio::process::Child,
+    tail: Tail,
+}
 
 /// What a harness can do, without spending a turn on it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -181,19 +214,49 @@ impl Worker {
     /// A package manager installs CLIs as `.cmd` on Windows, and the system's
     /// process spawner will not run one directly; going through `cmd /C` is the
     /// only way to start what the user configured.
-    fn spawn(&self) -> crate::Result<tokio::process::Child> {
-        self.program_command()
+    fn spawn(&self) -> crate::Result<Spawned> {
+        let mut child = self
+            .program_command()
             .args(&self.args)
             .current_dir(&self.cwd)
             .envs(&self.env)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
+            .stderr(Stdio::piped())
             .kill_on_drop(true)
             .spawn()
             .map_err(|error| {
                 crate::Error::Harness(format!("cannot start {}: {error}", self.program.display()))
-            })
+            })?;
+
+        let tail = Tail::default();
+
+        if let Some(stderr) = child.stderr.take() {
+            let sink = tail.clone();
+
+            tokio::spawn(async move {
+                use tokio::io::AsyncBufReadExt;
+
+                let mut lines = tokio::io::BufReader::new(stderr).lines();
+
+                while let Ok(Some(line)) = lines.next_line().await {
+                    sink.push(line);
+                }
+            });
+        }
+
+        Ok(Spawned { child, tail })
+    }
+
+    /// An error that carries whatever the harness said before it died.
+    fn failed(&self, error: agent_client_protocol::Error, tail: &Tail) -> crate::Error {
+        let said = tail.render();
+
+        if said.trim().is_empty() {
+            return crate::Error::Protocol(error);
+        }
+
+        crate::Error::Harness(format!("{error:?}\n--- harness stderr ---\n{said}"))
     }
 
     fn program_command(&self) -> tokio::process::Command {
@@ -226,7 +289,7 @@ impl Worker {
         prompt: &str,
         permission: Arc<dyn Permission>,
     ) -> crate::Result<Turn> {
-        let mut child = self.spawn()?;
+        let Spawned { mut child, tail } = self.spawn()?;
 
         let outgoing = child
             .stdin
@@ -324,7 +387,7 @@ impl Worker {
                     .await
             })
             .await
-            .map_err(Into::into)
+            .map_err(|error| self.failed(error, &tail))
     }
 
     /// Starts the harness and asks only what it can do: no model, no prompt.
@@ -332,7 +395,7 @@ impl Worker {
     /// This is the check a person runs before trusting the wiring — a handshake
     /// and a session, then the process is dropped.
     pub async fn probe(&self) -> crate::Result<Probe> {
-        let mut child = self.spawn()?;
+        let Spawned { mut child, tail } = self.spawn()?;
 
         let outgoing = child.stdin.take().expect("stdin is piped").compat_write();
         let incoming = child.stdout.take().expect("stdout is piped").compat();
@@ -362,7 +425,7 @@ impl Worker {
                     .await
             })
             .await
-            .map_err(Into::into)
+            .map_err(|error| self.failed(error, &tail))
     }
 
     /// For callers that only ever refuse.

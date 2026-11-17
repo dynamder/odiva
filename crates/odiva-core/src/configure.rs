@@ -7,6 +7,7 @@
 //! boundary it starts with.
 
 use std::env;
+use std::path::PathBuf;
 
 use odiva_harness::Harness;
 
@@ -30,4 +31,40 @@ pub fn harness() -> Harness {
     }
 
     harness
+}
+
+/// A startup warning when dsh's own home would stop it from booting.
+///
+/// dsh writes `profiles/<name>/cordis.yml` on every boot, so a read-only home
+/// fails before the handshake — with nothing in our log to say why.
+pub fn warning() -> Option<String> {
+    let program = env::var("ODIVA_HARNESS").unwrap_or_else(|_| "dsh".to_owned());
+
+    if !program.to_lowercase().contains("dsh") {
+        return None;
+    }
+
+    let home = env::var_os("ODIVA_DSH_HOME")
+        .or_else(|| env::var_os("DSH_HOME"))
+        .map(PathBuf::from)
+        .or_else(|| env::var_os("USERPROFILE").map(|home| PathBuf::from(home).join(".dsh")))?;
+
+    let target = if home.is_dir() {
+        home.clone()
+    } else {
+        home.parent()?.to_path_buf()
+    };
+
+    let probe = target.join(".odiva-write-probe");
+
+    match std::fs::write(&probe, b"") {
+        Ok(()) => {
+            let _ = std::fs::remove_file(&probe);
+            None
+        }
+        Err(error) => Some(format!(
+            "DSH_HOME {} 不可写（{error}）：dsh 启动会在 cordis.yml 上失败。把 ODIVA_DSH_HOME 指到一个可写目录",
+            home.display()
+        )),
+    }
 }

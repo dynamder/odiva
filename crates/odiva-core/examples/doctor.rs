@@ -23,6 +23,10 @@ async fn main() {
     let harness = configure::harness();
 
     println!("harness: {harness:?}");
+
+    if let Some(warning) = configure::warning() {
+        println!("注意：{warning}");
+    }
     println!("工作目录: {}", cwd.display());
 
     let worker = harness.worker(&cwd);

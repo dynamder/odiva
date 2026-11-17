@@ -16,6 +16,11 @@ fn main() -> iced::Result {
     let journal = Journal::new(root.join("odiva.log"));
     let harness = odiva_core::configure::harness();
 
+    if let Some(warning) = odiva_core::configure::warning() {
+        println!("odiva: {warning}");
+        journal.line(&format!("启动：{warning}"));
+    }
+
     listen(journal.clone());
 
     for line in [
@@ -78,8 +83,15 @@ fn listen(journal: Journal) {
     struct Records(Journal);
 
     impl log::Log for Records {
+        /// Everything worth a line, and nothing else.
+        ///
+        /// Warnings come from everywhere — iced's "a frame never settled" is the
+        /// one that matters — but debug comes from this crate only: a dependency's
+        /// per-frame chatter would bury the one failure someone is looking for.
         fn enabled(&self, metadata: &log::Metadata) -> bool {
             metadata.level() <= log::max_level()
+                && (metadata.level() <= log::Level::Warn
+                    || metadata.target().starts_with("odiva"))
         }
 
         fn log(&self, record: &log::Record) {
