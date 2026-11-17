@@ -10,18 +10,21 @@ use odiva_proto::{CoreHandle, CoreMessage, Presence, Snapshot, UiMessage, WireMe
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 use crate::error::Result;
+use crate::handoff::Handoff;
 use crate::harness::Harness;
 use crate::ids::Ids;
 use crate::journal::Journal;
+use crate::line::{LineId, Mode};
+use crate::parked::{Parked, RequestIdle};
 use crate::roster::Roster;
 use crate::route::Route;
 use crate::say::{Said, Say};
-use crate::store::{Lane, Store, TALK};
+use crate::store::Store;
 use crate::talk::Talk;
 use crate::task::Origin;
-use crate::parked::{Parked, RequestIdle};
 use crate::tasks::{Nudge, Tasks, reading};
 use crate::tools;
+use crate::transcript::Transcript;
 use crate::waiting::Waiting;
 
 /// The context window compaction is measured against.
@@ -56,8 +59,6 @@ pub struct Engine {
     nudges: Option<UnboundedReceiver<Nudge>>,
     waiting: Waiting,
     tasks: Arc<Tasks>,
-    /// The busy period in progress, if any: a work lane's generation.
-    work: Option<u32>,
     /// Whether she asked to be idle until something happens.
     parked: Parked,
     /// Where the core writes down what it did.
@@ -86,7 +87,6 @@ impl Engine {
             nudges: Some(nudges),
             waiting: Waiting::default(),
             tasks,
-            work: None,
             parked: Parked::default(),
             journal,
         };
@@ -131,16 +131,20 @@ impl Engine {
         }
     }
 
-    /// The whole window, from the lane on disk.
+    /// The whole window, from the record on disk.
     fn attach(&self) {
-        let generation = self.store.newest(TALK);
-
-        let snapshot = match self.store.read(Lane::Talk { generation }) {
-            Ok(Some(log)) => Snapshot {
-                messages: log.messages().to_vec(),
+        let snapshot = match Transcript::new(self.store.transcript()).read() {
+            Ok(messages) => Snapshot {
+                messages,
                 presence: Presence::Online,
             },
-            _ => Snapshot::default(),
+            Err(error) => {
+                self.emit(CoreMessage::CoreFailed {
+                    note: format!("读不了窗口的记录：{error}"),
+                });
+
+                Snapshot::default()
+            }
         };
 
         self.emit(CoreMessage::CoreAttachedSession { snapshot });
@@ -215,34 +219,27 @@ impl Engine {
         inbox: &mut UnboundedReceiver<UiMessage>,
     ) -> Result<()> {
         let said = Said::default();
-        let busy = self.work_generation();
-        let mut talk = match busy {
-            Some(generation) => {
-                let jobs = self
-                    .tasks
-                    .unfinished()
-                    .iter()
-                    .map(|task| task.line())
-                    .collect();
+        let busy = self.in_busy();
+        let id = LineId::normal(if busy { Mode::Busy } else { Mode::Idle });
 
-                Talk::busy(
-                    &self.store,
-                    generation,
-                    &*self.route,
-                    &self.prompt,
-                    self.roster(&said, true),
-                    said,
-                    jobs,
-                )?
-            }
-            None => Talk::open(
-                &self.store,
-                &*self.route,
-                &self.prompt,
-                self.roster(&said, false),
-                said,
-            )?,
-        };
+        let jobs: Vec<String> = self
+            .tasks
+            .unfinished()
+            .iter()
+            .map(|task| task.line())
+            .collect();
+
+        let seed = busy.then(|| Handoff::of(user, &jobs).render());
+
+        let mut talk = Talk::open(
+            &self.store,
+            id,
+            &*self.route,
+            &self.prompt,
+            self.roster(&said, busy),
+            said,
+            seed,
+        )?;
 
         if let Some(user) = user {
             talk.note(user)?;
@@ -298,32 +295,10 @@ impl Engine {
         Ok(())
     }
 
-    /// The work lane this busy period runs on, opening one if the period is new.
-    fn work_generation(&mut self) -> Option<u32> {
-        if self.parked.is_parked() {
-            return None;
-        }
-
-        if self.tasks.unfinished().is_empty() {
-            self.work = None;
-            return None;
-        }
-
-        if let Some(generation) = self.work {
-            return Some(generation);
-        }
-
-        let newest = self.store.newest("work");
-        let occupied = self
-            .store
-            .read(Lane::Work { generation: newest })
-            .map(|log| log.is_some())
-            .unwrap_or(false);
-
-        let generation = if occupied { newest + 1 } else { newest };
-
-        self.work = Some(generation);
-        Some(generation)
+    /// Busy is a fact, not a mode she chose: a task is unfinished and nobody has
+    /// asked for idle. The line follows from it.
+    fn in_busy(&self) -> bool {
+        !self.parked.is_parked() && !self.tasks.unfinished().is_empty()
     }
 
     fn roster(&self, said: &Said, busy: bool) -> Roster {

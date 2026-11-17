@@ -6,7 +6,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use odiva_core::{Engine, Handle, Harness, Lane, Route, Scripted, Store};
+use odiva_core::line::{LineId, Mode};
+use odiva_core::{Engine, Handle, Harness, Route, Scripted, Store, Transcript};
 use odiva_proto::{CoreHandle, CoreMessage, Presence, Side, UiMessage};
 use serde_json::json;
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -15,7 +16,7 @@ use yoagent::Agent;
 use yoagent::provider::{
     ModelConfig, ProviderError, StreamConfig, StreamEvent, StreamProvider, ToolDefinition,
 };
-use yoagent::types::{Content, Message, StopReason, Usage};
+use yoagent::types::{AgentMessage, Content, Message, StopReason, Usage};
 
 const PROMPT: &str = "你是 odiva。";
 
@@ -160,7 +161,55 @@ async fn a_second_question_gets_its_own_turn() {
     let messages = drain(&mut inbox, 4).await;
 
     assert_eq!(bubbles(&messages)[1], (Side::Assistant, "二".to_owned()));
-    assert!(store.path(Lane::Talk { generation: 0 }).exists());
+    assert!(store.line_path(&LineId::normal(Mode::Idle), 0).exists());
+}
+
+fn idle() -> LineId {
+    LineId::normal(Mode::Idle)
+}
+
+fn busy() -> LineId {
+    LineId::normal(Mode::Busy)
+}
+
+/// Every text a line carries, root aside.
+fn line(store: &Store, id: LineId, generation: u32) -> Vec<String> {
+    let session = store
+        .read_line(&id, generation)
+        .expect("a line file")
+        .expect("a written line");
+
+    session.path_messages().iter().filter_map(spoken).collect()
+}
+
+fn spoken(message: &AgentMessage) -> Option<String> {
+    let AgentMessage::Llm(message) = message else {
+        return None;
+    };
+
+    let content = match message {
+        Message::User { content, .. } | Message::Assistant { content, .. } => content,
+        _ => return None,
+    };
+
+    let text: String = content
+        .iter()
+        .filter_map(|block| match block {
+            Content::Text { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+
+    (!text.trim().is_empty()).then_some(text)
+}
+
+fn transcript(store: &Store) -> Vec<(Side, String)> {
+    Transcript::new(store.transcript())
+        .read()
+        .expect("a transcript")
+        .into_iter()
+        .map(|message| (message.from, message.markdown))
+        .collect()
 }
 
 /// Answers from the next script line, but slowly enough for a second message to
@@ -302,7 +351,7 @@ async fn a_dispatched_task_comes_back_as_a_sentence() {
 }
 
 #[tokio::test]
-async fn a_task_in_flight_moves_the_conversation_to_a_work_lane() {
+async fn a_task_in_flight_moves_the_conversation_to_the_busy_line() {
     let store = scratch("engine-work-lane");
     let route = Arc::new(Scripted::new(vec![
         vec![
@@ -330,31 +379,24 @@ async fn a_task_in_flight_moves_the_conversation_to_a_work_lane() {
     });
     drain(&mut inbox, 4).await;
 
-    let work = store
-        .read(Lane::Work { generation: 0 })
-        .expect("a work file")
-        .expect("a written work lane");
+    let busy = line(&store, busy(), 0);
+    assert!(busy[0].contains("【交接】"), "the busy line starts from the handoff");
+    assert!(busy[0].contains("t1"));
 
-    assert!(work.messages()[0].markdown.contains("【交接】"));
-    assert!(work.messages()[0].markdown.contains("t1"));
-
-    let talk = store
-        .read(Lane::Talk { generation: 0 })
-        .expect("a talk file")
-        .expect("a written talk lane");
-
-    assert_eq!(talk.messages().len(), 3);
+    let shown = transcript(&store);
     assert!(
-        talk
-            .messages()
-            .iter()
-            .all(|message| !message.markdown.contains("【交接】")),
-        "the handoff never reaches the public record"
+        shown.iter().all(|(_, markdown)| !markdown.contains("【交接】")),
+        "the handoff never reaches the record"
+    );
+    assert_eq!(
+        shown.iter().filter(|(side, _)| *side == Side::User).count(),
+        2,
+        "the record keeps every line the person typed"
     );
 }
 
 #[tokio::test]
-async fn asking_to_be_idle_moves_the_next_turn_off_the_work_lane() {
+async fn asking_to_be_idle_moves_the_next_turn_off_the_busy_line() {
     let store = scratch("engine-parked");
     let route = Arc::new(Scripted::new(vec![
         vec![
@@ -395,26 +437,16 @@ async fn asking_to_be_idle_moves_the_next_turn_off_the_work_lane() {
     });
     drain(&mut inbox, 4).await;
 
-    let work = store
-        .read(Lane::Work { generation: 0 })
-        .expect("a work file")
-        .expect("a written work lane");
-
-    assert_eq!(
-        work.messages().len(),
-        2,
-        "only the parked turn wrote to the work lane"
+    let stopped = line(&store, busy(), 0);
+    assert!(
+        stopped.iter().any(|text| text.contains("先停一下")),
+        "the turn that parked ran on the busy line"
     );
 
-    let talk = store
-        .read(Lane::Talk { generation: 0 })
-        .expect("a talk file")
-        .expect("a written talk lane");
-
-    assert_eq!(
-        talk.messages().len(),
-        4,
-        "every line the person typed, and her answer"
+    let idle = line(&store, idle(), 0);
+    assert!(
+        idle.iter().any(|text| text.contains("那你说说现在在干嘛")),
+        "the turn after parking runs on the idle line"
     );
 }
 
@@ -438,10 +470,10 @@ async fn a_turn_that_fills_the_window_rotates_the_lane() {
     drain(&mut inbox, 3).await;
 
     assert!(
-        store.path(Lane::Talk { generation: 1 }).exists(),
-        "a lane past the threshold starts the next generation"
+        store.line_path(&idle(), 1).exists(),
+        "a line past the threshold starts the next generation"
     );
-    assert!(store.path(Lane::Talk { generation: 0 }).exists());
+    assert!(store.line_path(&idle(), 0).exists());
 }
 
 #[tokio::test]

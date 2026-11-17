@@ -7,7 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::store::Log;
+use odiva_proto::WireMessage;
 
 /// The smallest true thing that can be said about a conversation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -20,13 +20,8 @@ pub struct Handoff {
 
 impl Handoff {
     /// Reads the public record and whatever work is still out.
-    pub fn of(log: &Log, jobs: &[String]) -> Self {
-        let last = log
-            .messages()
-            .iter()
-            .rev()
-            .find(|message| message.from == odiva_proto::Side::User);
-
+    /// Reads the line the person just left and whatever work is still out.
+    pub fn of(last: Option<&WireMessage>, jobs: &[String]) -> Self {
         let topic = last
             .map(|message| first_line(&message.markdown, 80))
             .unwrap_or_else(|| "还没说什么".to_owned());

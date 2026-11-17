@@ -1,97 +1,68 @@
-//! The lanes: one activation, one context, one toolset.
+//! One activation: a line, a toolset, and one turn.
 //!
-//! An activation is built, run to a boundary, written to disk, and dropped. It
-//! owns the agent — context and toolset — for exactly as long as it runs, which
-//! is why a restart is not a recovery: there is never any state to recover.
-//!
-//! Two lanes share this type. Idle runs on the talking lane, which is the public
-//! record. Busy runs on a work lane rooted at a handoff, and while it does, the
-//! public record still receives the person's lines and her `say`s — the work
-//! lane is where the orchestration lives, the talking lane is what anyone can
-//! read.
+//! An activation is built, run to a boundary, written back, and dropped. The
+//! line is the record; the agent is what reads it for exactly as long as one
+//! turn lasts, which is why a restart is not a recovery — there is never any
+//! state to recover.
 
-use odiva_proto::{Side, WireMessage};
+use odiva_proto::WireMessage;
 use yoagent::Agent;
 use yoagent::types::{AgentMessage, Content, Message, StopReason};
 
 use crate::error::Result;
-use crate::handoff::Handoff;
+use crate::line::{Line, LineId};
 use crate::roster::Roster;
 use crate::route::Route;
 use crate::say::Said;
-use crate::store::{Lane, Log, Store};
+use crate::store::Store;
+use crate::transcript::Transcript;
 
 /// A conversation with its history loaded and its roster installed.
 pub struct Talk {
     agent: Agent,
-    store: Store,
+    line: Line,
     said: Said,
-    lane: Lane,
-    log: Log,
-    /// The talking lane, when this activation runs somewhere else.
-    public: Option<(Lane, Log)>,
+    transcript: Transcript,
 }
 
 impl Talk {
-    /// Opens the talking lane, starting the next generation when the prompt
-    /// under which it was opened is no longer this one.
+    /// Opens a line and installs the roster on it.
+    ///
+    /// `seed` is what the core says into a line before its first turn — a
+    /// handoff. It is only used when the line has never carried a message.
     pub fn open(
         store: &Store,
+        id: LineId,
         route: &dyn Route,
         prompt: &str,
         roster: Roster,
         said: Said,
+        seed: Option<String>,
     ) -> Result<Self> {
-        let (lane, log) = store.open(Lane::Talk { generation: 0 }, prompt)?;
-        let agent = assemble(route, prompt, roster, &log);
+        let mut line = Line::open(store, id, prompt)?;
 
-        Ok(Self {
-            agent,
-            store: store.clone(),
-            said,
-            lane,
-            log,
-            public: None,
-        })
-    }
-
-    /// Opens a busy period's lane, rooted at a handoff.
-    ///
-    /// A fresh work lane starts from what the conversation was about and what is
-    /// still out there; it never inherits the talking lane's prefix, so the
-    /// orchestration cannot drift into the conversation.
-    pub fn busy(
-        store: &Store,
-        generation: u32,
-        route: &dyn Route,
-        prompt: &str,
-        roster: Roster,
-        said: Said,
-        jobs: Vec<String>,
-    ) -> Result<Self> {
-        let (public_lane, public) = store.open(Lane::Talk { generation: 0 }, prompt)?;
-        let lane = Lane::Work { generation };
-        let mut log = store.exactly(lane, prompt)?;
-
-        if store.read(lane)?.is_none() {
-            log.push_note(Side::User, Handoff::of(&public, &jobs).render());
-            store.write(lane, &log)?;
+        if line.is_fresh()
+            && let Some(seed) = seed
+        {
+            line.push_note(seed)?;
         }
 
-        let agent = assemble(route, prompt, roster, &log);
+        let agent = assemble(route, prompt, roster, &line.messages());
 
         Ok(Self {
             agent,
-            store: store.clone(),
+            line,
             said,
-            lane,
-            log,
-            public: Some((public_lane, public)),
+            transcript: Transcript::new(store.transcript()),
         })
     }
 
-    pub fn lane(&self) -> Lane {
-        self.lane
+    pub fn id(&self) -> &LineId {
+        self.line.id()
+    }
+
+    pub fn generation(&self) -> u32 {
+        self.line.generation()
     }
 
     /// What the provider said when the turn went wrong, if it did.
@@ -124,11 +95,8 @@ impl Talk {
     }
 
     /// What the model said in its own voice, tools aside.
-    ///
-    /// A turn that ends without a `say` still produced something, and that text
-    /// is the difference between "she chose silence" and "the tool was ignored".
     pub fn monologue(&self) -> Option<String> {
-        let said = self.agent.messages().iter().rev().find_map(|message| {
+        self.agent.messages().iter().rev().find_map(|message| {
             let AgentMessage::Llm(Message::Assistant { content, .. }) = message else {
                 return None;
             };
@@ -142,25 +110,13 @@ impl Talk {
                 .collect();
 
             (!text.trim().is_empty()).then_some(text)
-        })?;
-
-        Some(said)
+        })
     }
 
-    /// Records what the person said, before anything is run.
-    ///
-    /// Written immediately: a message the window showed must survive the turn
-    /// that answered it.
+    /// Records what the person said in the window's record, before anything
+    /// runs: a message the window showed must survive the turn that answered it.
     pub fn note(&mut self, message: &WireMessage) -> Result<()> {
-        self.log.push(message.clone());
-        self.store.write(self.lane, &self.log)?;
-
-        if let Some((lane, log)) = &mut self.public {
-            log.push(message.clone());
-            self.store.write(*lane, log)?;
-        }
-
-        Ok(())
+        self.transcript.append(message)
     }
 
     /// Runs one turn. What the model does, it does through its tools.
@@ -184,18 +140,14 @@ impl Talk {
         self.flush()
     }
 
-    /// Keeps everything she said during the turn, closed cleanly or not.
+    /// Keeps everything this turn produced, closed cleanly or not: what she
+    /// said goes to the record, everything else to the line.
     pub fn flush(&mut self) -> Result<()> {
         for message in self.said.drain() {
-            self.log.push(message.clone());
-
-            if let Some((lane, log)) = &mut self.public {
-                log.push(message);
-                self.store.write(*lane, log)?;
-            }
+            self.transcript.append(&message)?;
         }
 
-        self.store.write(self.lane, &self.log)
+        self.line.absorb(self.agent.messages())
     }
 
     /// How big this lane's context was, in the provider's own count.
@@ -204,77 +156,19 @@ impl Talk {
         usage.input + usage.cache_read + usage.cache_write + usage.output
     }
 
-    /// Rotates the talking lane when it has outgrown itself.
-    ///
-    /// The old file stays where it is; the new one starts with a residue and the
-    /// last few exchanges, so what follows is a conversation that remembers what
-    /// it was about and nothing else. Work lanes are one period each and are not
-    /// rotated under themselves.
+    /// Rotates the line when it has outgrown itself. The old file stays where
+    /// it is; the new one starts with a residue and the last few exchanges.
     pub fn compact(&mut self, keep: usize) -> Result<()> {
-        let Lane::Talk { generation } = self.lane else {
-            return Ok(());
-        };
-
-        let next = Lane::Talk {
-            generation: generation + 1,
-        };
-
-        let mut log = Log::new(self.log.system());
-        log.push_note(Side::User, residue(self.log.messages(), keep));
-
-        for message in tail(self.log.messages(), keep) {
-            log.push(message.clone());
-        }
-
-        self.store.write(next, &log)?;
-        self.lane = next;
-        self.log = log;
-
-        Ok(())
+        self.line.compact(keep)
     }
 }
 
-/// The last `keep` messages, oldest first.
-fn tail(messages: &[WireMessage], keep: usize) -> &[WireMessage] {
-    let start = messages.len().saturating_sub(keep);
-    &messages[start..]
-}
-
-/// A few lines about what came before — the shape of a summary, not a summary.
-fn residue(messages: &[WireMessage], keep: usize) -> String {
-    let start = messages.len().saturating_sub(keep);
-    let dropped = &messages[..start];
-
-    if dropped.is_empty() {
-        return "【压缩】前面没有落下什么。".to_owned();
-    }
-
-    let mut text = format!("【压缩】前面 {} 条的大意：\n", dropped.len());
-
-    for message in dropped.iter().rev().take(4).rev() {
-        let line = message
-            .markdown
-            .lines()
-            .find(|line| !line.trim().is_empty())
-            .unwrap_or("");
-
-        let side = match message.from {
-            Side::User => "对方",
-            Side::Assistant => "你",
-        };
-
-        text.push_str(&format!("- {side}：{}\n", line.chars().take(80).collect::<String>()));
-    }
-
-    text
-}
-
-fn assemble(route: &dyn Route, prompt: &str, roster: Roster, log: &Log) -> Agent {
+fn assemble(route: &dyn Route, prompt: &str, roster: Roster, messages: &[AgentMessage]) -> Agent {
     roster.install(
         route
             .agent()
             .with_system_prompt(prompt)
-            .with_messages(log.history())
+            .with_messages(messages.to_vec())
             .without_context_management(),
     )
 }

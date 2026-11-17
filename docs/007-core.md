@@ -218,13 +218,14 @@ fn classify(ask: &Ask) -> Verdict;
 ## 11 上下文与存储
 
 ```
-transcript.jsonl                 窗口的真相：每条 WireMessage，append-only
-lines/normal-idle.<gen>.jsonl    yoagent Session 的 JSONL，第一行 root(system prompt)
-lines/normal-busy.<gen>.jsonl
-lines/task-t3.<gen>.jsonl
-tasks/t3.json                    台账：origin、brief、workspace、status、report、sessions、pid
-state.json                       mode 不存；只存交接与计数（§12）
-budget.json  memory/  odiva.log
+transcript.jsonl                      窗口的真相：每条 WireMessage，append-only
+contexts/lines/normal-idle.<gen>.jsonl    yoagent Session 的 JSONL，第一行 root(system prompt)
+contexts/lines/normal-busy.<gen>.jsonl
+contexts/lines/task-t3.<gen>.jsonl
+contexts/budget.json
+tasks/t3.json                         台账：origin、brief、workspace、status、report、sessions、pid
+state.json                            mode 不存；只存交接与计数（§12）
+memory/  odiva.log
 ```
 
 - 线直接用 `yoagent::Session`：entry 自带 `id`、`parent`、`AgentMessage`，工具调用与结果都在里面。
