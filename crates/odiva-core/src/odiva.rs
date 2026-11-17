@@ -501,12 +501,14 @@ impl Odiva {
             LineId::Normal(_) => tools::Position::Normal,
         };
 
+        let roster = self.roster(ctx, &spoken, &id, self.mode, position);
+
         let mut talk = Talk::open(crate::talk::Activation {
             store: &self.store,
             id,
             route: &*self.route,
             prompt: &self.prompt,
-            roster: self.roster(ctx, &spoken, self.mode, position),
+            roster,
             said: spoken,
             seed: None,
             halt: self.halt.clone(),
@@ -739,6 +741,7 @@ impl Odiva {
         &self,
         ctx: &mut Context<Self, ()>,
         spoken: &Spoken,
+        line: &LineId,
         mode: Mode,
         position: tools::Position,
     ) -> Roster {
@@ -751,6 +754,8 @@ impl Odiva {
         tools.extend(tools::roster(
             self.records.clone(),
             ctx.actor_ref().clone(),
+            &self.store,
+            line,
             mode,
             position,
         ));

@@ -547,10 +547,77 @@ pub enum Position {
     Task,
 }
 
+#[derive(Debug, Deserialize)]
+struct HistoryArgs {
+    from: Option<usize>,
+    to: Option<usize>,
+    contains: Option<String>,
+    limit: Option<usize>,
+}
+
+/// Read back what this line actually said, compactions and all.
+pub struct ViewHistory {
+    store: crate::store::Store,
+    line: LineId,
+}
+
+impl ViewHistory {
+    pub fn new(store: crate::store::Store, line: LineId) -> Self {
+        Self { store, line }
+    }
+}
+
+#[async_trait::async_trait]
+impl AgentTool for ViewHistory {
+    fn name(&self) -> &str {
+        "view_history"
+    }
+
+    fn label(&self) -> &str {
+        "Read back"
+    }
+
+    fn description(&self) -> &str {
+        "Compaction rewrites what you remember, not what was said. Ask this for the exact words \
+         of your own line — this one, nobody else's."
+    }
+
+    fn parameters_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "from": { "type": "integer", "description": "First position, oldest is 0." },
+                "to": { "type": "integer", "description": "Last position, inclusive." },
+                "contains": { "type": "string", "description": "Only entries containing this." },
+                "limit": { "type": "integer", "description": "How many of the newest matches. Default 20." }
+            }
+        })
+    }
+
+    async fn execute(&self, params: Value, _ctx: ToolContext) -> Result<ToolResult, ToolError> {
+        let args: HistoryArgs = serde_json::from_value(params)
+            .map_err(|error| ToolError::InvalidArgs(error.to_string()))?;
+
+        let query = crate::history::Query {
+            from: args.from,
+            to: args.to,
+            contains: args.contains,
+            limit: args.limit,
+        };
+
+        let text = crate::history::render(&self.store, &self.line, &query)
+            .map_err(|error| ToolError::Failed(error.to_string()))?;
+
+        Ok(said(text))
+    }
+}
+
 /// What a turn may do, from where it runs.
 pub fn roster(
     records: ActorRef<Records>,
     odiva: ActorRef<Odiva>,
+    store: &crate::store::Store,
+    line: &LineId,
     mode: Mode,
     position: Position,
 ) -> Vec<Box<dyn AgentTool>> {
@@ -589,6 +656,11 @@ pub fn roster(
             }
         }
     }
+
+    tools.push(Box::new(ViewHistory::new(
+        store.clone(),
+        line.clone(),
+    )));
 
     tools
 }

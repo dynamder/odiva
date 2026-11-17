@@ -10,6 +10,7 @@ pub mod budget;
 pub mod error;
 pub mod halt;
 pub mod handoff;
+pub mod history;
 pub mod ids;
 pub mod journal;
 pub mod ledger;
