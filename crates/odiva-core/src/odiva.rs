@@ -178,7 +178,7 @@ impl Actor for Odiva {
     async fn on_start(args: Self::Args, _ctx: ActorRef<Self>) -> Result<Self> {
         let handoff = crate::state::State::load(&args.store).handoff;
 
-        Ok(Self {
+        let odiva = Self {
             store: args.store,
             ids: Ids::default(),
             route: args.route,
@@ -202,7 +202,11 @@ impl Actor for Odiva {
             runs: HashMap::new(),
             permits: HashMap::new(),
             next_run: 0,
-        })
+        };
+
+        odiva.clean();
+
+        Ok(odiva)
     }
 }
 
@@ -476,6 +480,26 @@ impl Message<Event> for Odiva {
 }
 
 impl Odiva {
+    /// A line is resident: one message a provider refuses to take back makes
+    /// the line unusable from the next turn on, so startup is where it is
+    /// cleaned — before the person says anything and finds out.
+    fn clean(&self) {
+        let notes = match self.store.repair_lines() {
+            Ok(notes) => notes,
+            Err(error) => {
+                let note = format!("启动：清理线路失败：{error}");
+                self.journal.line(&note);
+                eprintln!("odiva: {note}");
+                return;
+            }
+        };
+
+        for note in notes {
+            self.journal.line(format!("启动：{note}"));
+            eprintln!("odiva: {note}");
+        }
+    }
+
     /// Something happened outside the conversation: it enters her context and
     /// nothing else, so the record stays a record of what was said.
     async fn notice(&mut self, id: &str, ctx: &mut Context<Self, ()>) {

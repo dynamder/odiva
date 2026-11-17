@@ -3,14 +3,16 @@
 use std::path::PathBuf;
 
 use odiva_core::line::{LineId, Mode};
+use odiva_core::line::repair::repair;
 use odiva_core::say::Said;
 use odiva_core::halt::Halt;
 use odiva_core::{Ids, Line, Roster, Route, Say, Scripted, Store, Talk, Transcript};
 use odiva_proto::{CoreMessage, Side};
 use serde_json::json;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
+use yoagent::Session;
 use yoagent::provider::mock::{MockResponse, MockToolCall};
-use yoagent::types::{AgentMessage, Message};
+use yoagent::types::{AgentMessage, CustomMessage, Message, StopReason, Usage};
 
 const PROMPT: &str = "你是 odiva。";
 const BUSY: LineId = LineId::Normal(Mode::Busy);
@@ -265,6 +267,72 @@ async fn a_seed_only_enters_a_fresh_line() {
         !carried.iter().any(|message| message.contains("不该进来")),
         "a seed belongs to the first turn, not to every one"
     );
+}
+
+#[tokio::test]
+async fn a_failed_turn_leaves_nothing_a_provider_would_refuse() {
+    let store = scratch("talk-failed-turn");
+    let (out, _inbox, ids) = window();
+    let said = Said::default();
+    let route = Scripted::one(vec![MockResponse::ErrorWithUsage(
+        "400 Bad Request".to_owned(),
+        Usage::default(),
+    )]);
+
+    let mut talk = opening(&store, idle(), &route, PROMPT, tools(out, &ids, &said), &said, None);
+    talk.turn(&ids.theirs("在吗")).await.expect("a turn");
+
+    let session = store
+        .read_line(&idle(), 0)
+        .expect("a line file")
+        .expect("a written line");
+
+    assert_eq!(
+        repair(&session.path_messages()),
+        None,
+        "an assistant with nothing to send would poison the next turn"
+    );
+    assert!(
+        text(&store, idle(), 0).iter().any(|said| said == "在吗"),
+        "the person's line survives the turn that failed"
+    );
+}
+
+#[tokio::test]
+async fn startup_cleans_a_line_no_provider_would_take() {
+    let store = scratch("talk-startup-repair");
+
+    let mut broken = Session::new();
+    broken.append(AgentMessage::Custom(CustomMessage::new(
+        "root",
+        json!({ "system": PROMPT }),
+    )));
+    broken.append(AgentMessage::Llm(Message::user("在吗")));
+    broken.append(AgentMessage::Llm(Message::assistant(
+        Vec::new(),
+        StopReason::Aborted,
+        "deepseek-flash",
+        "deepseek",
+        Usage::default(),
+    )));
+    store.write_line(&idle(), 0, &broken).expect("a broken line");
+
+    let notes = store.repair_lines().expect("a cleanup");
+    assert_eq!(notes.len(), 1, "the broken line is named");
+
+    assert!(
+        store.line_path(&idle(), 0).exists(),
+        "the broken file stays where it is"
+    );
+
+    let cleaned = store
+        .read_line(&idle(), 1)
+        .expect("a line file")
+        .expect("a cleaned line");
+
+    assert_eq!(cleaned.path_messages().len(), 2, "the root and what was said");
+    assert_eq!(repair(&cleaned.path_messages()), None);
+    assert!(store.repair_lines().expect("a second cleanup").is_empty());
 }
 
 #[tokio::test]

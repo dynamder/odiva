@@ -6,6 +6,7 @@
 
 pub mod file;
 pub mod id;
+pub mod repair;
 
 pub use id::{LineId, Mode};
 
@@ -114,15 +115,17 @@ impl Line {
         self.persist_new()
     }
 
-    /// Keeps everything the run produced. The history must extend the path;
-    /// anything else is a bug worth an error, not a quiet rewrite.
+    /// Keeps everything the run produced that a provider will take back. The
+    /// history must extend the path; anything else is a bug worth an error, not
+    /// a quiet rewrite.
     pub fn absorb(&mut self, messages: &[AgentMessage]) -> Result<()> {
-        self.session.append_new(messages)?;
+        let legal = repair::repair(messages);
+
+        self.session
+            .append_new(legal.as_deref().unwrap_or(messages))?;
         self.persist_new()
     }
 
-    /// Rotates to the next generation: a residue, then the last `keep`
-    /// messages. The old file stays where it is.
     /// Rotates to the next generation: a summary, then the last `keep`
     /// messages. The old file stays where it is. Without a summary, a
     /// deterministic residue stands in for one.
@@ -138,7 +141,10 @@ impl Line {
             "【压缩】\n{summary}"
         ))));
 
-        for message in &messages[tail..] {
+        // The cut can land between a tool call and its result.
+        let tail = repair::repair(&messages[tail..]).unwrap_or_else(|| messages[tail..].to_vec());
+
+        for message in &tail {
             session.append(message.clone());
         }
 

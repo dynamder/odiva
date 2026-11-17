@@ -43,6 +43,15 @@ impl LineId {
             Self::Task(id) => format!("task-{id}"),
         }
     }
+
+    /// The line a file name belongs to, if it names one.
+    pub fn named(name: &str) -> Option<Self> {
+        match name {
+            "normal-idle" => Some(Self::Normal(Mode::Idle)),
+            "normal-busy" => Some(Self::Normal(Mode::Busy)),
+            task => Some(Self::Task(task.strip_prefix("task-")?.to_owned())),
+        }
+    }
 }
 
 impl fmt::Display for LineId {
