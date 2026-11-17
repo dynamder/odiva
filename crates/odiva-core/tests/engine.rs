@@ -777,6 +777,7 @@ async fn a_permission_request_reaches_her_and_the_answer_goes_back() {
                 saying("接了。"),
                 done(),
             ],
+            vec![switching("t1", 600), done()],
             vec![permitting("t1", false), done()],
         ],
         &store,
@@ -794,4 +795,126 @@ async fn a_permission_request_reaches_her_and_the_answer_goes_back() {
         "the worker was told no, by name: {}",
         task.said
     );
+}
+
+fn switching(id: &str, timeout_secs: u64) -> MockResponse {
+    MockResponse::ToolCalls(vec![MockToolCall {
+        name: "switch_to_task".to_owned(),
+        arguments: json!({ "id": id, "timeout_secs": timeout_secs }),
+        provider_metadata: None,
+    }])
+}
+
+fn back_to_normal() -> MockResponse {
+    MockResponse::ToolCalls(vec![MockToolCall {
+        name: "switch_to_normal".to_owned(),
+        arguments: json!({}),
+        provider_metadata: None,
+    }])
+}
+
+#[tokio::test]
+async fn switching_to_a_task_opens_its_line_and_coming_back_leaves_a_note() {
+    let store = scratch("engine-switch");
+    let workspace = store.root().join("ws");
+    let workspace = workspace.to_str().expect("a path");
+
+    let route = Arc::new(Scripted::new(vec![
+        vec![accepting("改 README", "正在整理记忆", workspace), saying("接了。"), done()],
+        vec![switching("t1", 600), done()],
+        vec![done()],
+        vec![back_to_normal(), done()],
+    ]));
+
+    let (handle, mut inbox) = start(store.clone(), route, PROMPT, harness("slow"));
+
+    handle.send(UiMessage::UserSubmittedText {
+        text: "把 README 改一下".to_owned(),
+    });
+    drain_until(&mut inbox, |message| {
+        matches!(message, CoreMessage::MessageAppended { message } if message.markdown == "接了。")
+    })
+    .await;
+
+    handle.send(UiMessage::UserSubmittedText {
+        text: "去看看 t1".to_owned(),
+    });
+
+    let task_line = LineId::task("t1");
+    let mut opened = false;
+
+    for _ in 0..200 {
+        if store.read_line(&task_line, 0).expect("a line").is_some() {
+            let text = line(&store, task_line.clone(), 0);
+
+            if text.iter().any(|entry| entry.contains("你切到了 t1")) {
+                opened = true;
+                break;
+            }
+        }
+
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+
+    assert!(opened, "switching opens the task's own line");
+
+    handle.send(UiMessage::UserSubmittedText {
+        text: "回 normal 吧".to_owned(),
+    });
+
+    let mut came_back = false;
+
+    for _ in 0..200 {
+        let normal = line(&store, busy(), 0);
+
+        if normal.iter().any(|entry| entry.contains("回到 normal：t1")) {
+            came_back = true;
+            break;
+        }
+
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+
+    assert!(came_back, "leaving the task is written into the normal line");
+}
+
+#[tokio::test]
+async fn a_switch_timeout_comes_back_to_normal() {
+    let store = scratch("engine-switch-timeout");
+    let workspace = store.root().join("ws");
+    let workspace = workspace.to_str().expect("a path");
+
+    let route = Arc::new(Scripted::new(vec![
+        vec![accepting("改 README", "正在整理记忆", workspace), saying("接了。"), done()],
+        vec![switching("t1", 1), done()],
+    ]));
+
+    let (handle, mut inbox) = start(store.clone(), route, PROMPT, harness("slow"));
+
+    handle.send(UiMessage::UserSubmittedText {
+        text: "把 README 改一下".to_owned(),
+    });
+    drain_until(&mut inbox, |message| {
+        matches!(message, CoreMessage::MessageAppended { message } if message.markdown == "接了。")
+    })
+    .await;
+
+    handle.send(UiMessage::UserSubmittedText {
+        text: "去看看 t1".to_owned(),
+    });
+
+    let mut timed_out = false;
+
+    for _ in 0..240 {
+        let normal = line(&store, busy(), 0);
+
+        if normal.iter().any(|entry| entry.contains("一直没有动静")) {
+            timed_out = true;
+            break;
+        }
+
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+
+    assert!(timed_out, "a silent task hands the turn back");
 }

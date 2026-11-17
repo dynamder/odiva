@@ -10,7 +10,7 @@ use yoagent::types::{AgentTool, Content, ToolContext, ToolError, ToolResult};
 
 use crate::brief;
 use crate::ledger::{self, Records};
-use crate::line::Mode;
+use crate::line::{LineId, Mode};
 use crate::odiva::{self, Odiva};
 use crate::task::{Origin, Status, Task};
 
@@ -165,6 +165,104 @@ impl AgentTool for Accept {
             .await;
 
         Ok(said(format!("接了 {id}，我去忙。")))
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct SwitchArgs {
+    id: String,
+    #[serde(default)]
+    timeout_secs: Option<u64>,
+}
+
+/// Go into one task's context for a while.
+pub struct SwitchToTask {
+    odiva: ActorRef<Odiva>,
+}
+
+impl SwitchToTask {
+    pub fn new(odiva: ActorRef<Odiva>) -> Self {
+        Self { odiva }
+    }
+}
+
+#[async_trait::async_trait]
+impl AgentTool for SwitchToTask {
+    fn name(&self) -> &str {
+        "switch_to_task"
+    }
+
+    fn label(&self) -> &str {
+        "Go to a task"
+    }
+
+    fn description(&self) -> &str {
+        "Move into one task's context and look at it. This turn ends first; if the task says \
+         nothing within the timeout, you are back in the normal line."
+    }
+
+    fn parameters_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "id": { "type": "string" },
+                "timeout_secs": {
+                    "type": "integer",
+                    "description": "How long to wait for it to react. Default 600."
+                }
+            },
+            "required": ["id"]
+        })
+    }
+
+    async fn execute(&self, params: Value, _ctx: ToolContext) -> Result<ToolResult, ToolError> {
+        let args: SwitchArgs = serde_json::from_value(params)
+            .map_err(|error| ToolError::InvalidArgs(error.to_string()))?;
+
+        let _ = self
+            .odiva
+            .tell(odiva::Switch {
+                line: LineId::task(args.id.clone()),
+                timeout: std::time::Duration::from_secs(args.timeout_secs.unwrap_or(600)),
+            })
+            .await;
+
+        Ok(said(format!("这一轮结束后进 {}。", args.id)))
+    }
+}
+
+/// Step back out of a task's context.
+pub struct SwitchToNormal {
+    odiva: ActorRef<Odiva>,
+}
+
+impl SwitchToNormal {
+    pub fn new(odiva: ActorRef<Odiva>) -> Self {
+        Self { odiva }
+    }
+}
+
+#[async_trait::async_trait]
+impl AgentTool for SwitchToNormal {
+    fn name(&self) -> &str {
+        "switch_to_normal"
+    }
+
+    fn label(&self) -> &str {
+        "Back to normal"
+    }
+
+    fn description(&self) -> &str {
+        "Leave this task's context and go back to the normal line. This turn ends first."
+    }
+
+    fn parameters_schema(&self) -> Value {
+        json!({ "type": "object", "properties": {} })
+    }
+
+    async fn execute(&self, _params: Value, _ctx: ToolContext) -> Result<ToolResult, ToolError> {
+        let _ = self.odiva.tell(odiva::ToNormal).await;
+        Ok(said("回 normal。"))
     }
 }
 
@@ -442,31 +540,54 @@ impl AgentTool for Permit {
     }
 }
 
-/// What each state may do. Idle watches the work; busy runs it.
+/// Where a turn runs: the dispatcher of a state, or one task's own context.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Position {
+    Normal,
+    Task,
+}
+
+/// What a turn may do, from where it runs.
 pub fn roster(
     records: ActorRef<Records>,
     odiva: ActorRef<Odiva>,
     mode: Mode,
+    position: Position,
 ) -> Vec<Box<dyn AgentTool>> {
-    let origin = match mode {
-        Mode::Idle => Origin::Interest,
-        Mode::Busy => Origin::User,
-    };
+    let mut tools: Vec<Box<dyn AgentTool>> = Vec::new();
 
-    let mut tools: Vec<Box<dyn AgentTool>> = vec![
-        Box::new(Dispatch::new(records.clone(), odiva.clone(), origin)),
-        Box::new(List::new(records.clone())),
-        Box::new(Read::new(records.clone())),
-    ];
+    match (mode, position) {
+        (Mode::Idle, Position::Normal) => {
+            tools.push(Box::new(Dispatch::new(
+                records.clone(),
+                odiva.clone(),
+                Origin::Interest,
+            )));
+            tools.push(Box::new(List::new(records.clone())));
+            tools.push(Box::new(Read::new(records.clone())));
+            tools.push(Box::new(Accept::new(records.clone(), odiva.clone())));
+            tools.push(Box::new(SwitchToTask::new(odiva.clone())));
+        }
+        (Mode::Busy, Position::Normal) => {
+            tools.push(Box::new(Dispatch::new(
+                records.clone(),
+                odiva.clone(),
+                Origin::User,
+            )));
+            tools.push(Box::new(List::new(records.clone())));
+            tools.push(Box::new(Read::new(records.clone())));
+            tools.push(Box::new(SwitchToTask::new(odiva.clone())));
+        }
+        (_, Position::Task) => {
+            tools.push(Box::new(Read::new(records.clone())));
+            tools.push(Box::new(Answer::new(records.clone(), odiva.clone())));
+            tools.push(Box::new(Cancel::new(odiva.clone())));
+            tools.push(Box::new(SwitchToNormal::new(odiva.clone())));
 
-    if mode == Mode::Idle {
-        tools.push(Box::new(Accept::new(records.clone(), odiva.clone())));
-    }
-
-    if mode == Mode::Busy {
-        tools.push(Box::new(Answer::new(records.clone(), odiva.clone())));
-        tools.push(Box::new(Cancel::new(odiva.clone())));
-        tools.push(Box::new(Permit::new(odiva)));
+            if mode == Mode::Busy {
+                tools.push(Box::new(Permit::new(odiva.clone())));
+            }
+        }
     }
 
     tools

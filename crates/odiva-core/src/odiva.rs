@@ -44,6 +44,9 @@ const COMPACT_AT: u64 = 60;
 /// How many messages survive a rotation.
 const KEEP: usize = 6;
 
+/// How long she may stay inside task lines before being sent back to normal.
+const STARVE: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+
 /// What a run reported, and what it needs answered.
 pub enum Event {
     /// A harness stopped on a permission request.
@@ -86,6 +89,26 @@ pub struct Accept {
     pub handoff: Handoff,
 }
 
+/// Go into one line, and come back if it says nothing.
+pub struct Switch {
+    pub line: LineId,
+    pub timeout: std::time::Duration,
+}
+
+/// Step back to the normal line of the current state.
+pub struct ToNormal;
+
+/// The switch timeout fired.
+pub struct Deadline {
+    pub line: LineId,
+    pub at: u64,
+}
+
+/// She has been inside task lines for too long.
+pub struct Starve {
+    pub at: u64,
+}
+
 pub struct Setup {
     pub store: Store,
     pub route: Arc<dyn Route>,
@@ -110,6 +133,10 @@ pub struct Odiva {
     harness: Harness,
     journal: Journal,
     mode: Mode,
+    active: LineId,
+    switch_at: u64,
+    switch_for: std::time::Duration,
+    starve_at: u64,
     waiting: Waiting,
     turn: TurnCancel,
     asking: Asking,
@@ -137,6 +164,10 @@ impl Actor for Odiva {
             harness: args.harness,
             journal: args.journal,
             mode: Mode::Idle,
+            active: LineId::normal(Mode::Idle),
+            switch_at: 0,
+            switch_for: std::time::Duration::from_secs(600),
+            starve_at: 0,
             waiting: args.waiting,
             turn: args.turn,
             asking: args.asking,
@@ -208,6 +239,83 @@ impl Message<Accept> for Odiva {
     async fn handle(&mut self, accept: Accept, ctx: &mut Context<Self, Self::Reply>) {
         self.enter_busy(accept.task, accept.handoff).await;
         self.fill(ctx).await;
+    }
+}
+
+impl Message<Switch> for Odiva {
+    type Reply = ();
+
+    async fn handle(&mut self, msg: Switch, ctx: &mut Context<Self, Self::Reply>) {
+        let LineId::Task(id) = &msg.line else {
+            return;
+        };
+
+        let Some(task) = self.lookup(id).await else {
+            return;
+        };
+
+        self.active = msg.line.clone();
+        self.switch_at += 1;
+        self.starve_at += 1;
+        self.switch_for = msg.timeout;
+
+        let at = self.switch_at;
+        let line = msg.line.clone();
+        let me = ctx.actor_ref().clone();
+        let timeout = msg.timeout;
+
+        tokio::spawn(async move {
+            tokio::time::sleep(timeout).await;
+            let _ = me.tell(Deadline { line, at }).await;
+        });
+
+        let at = self.starve_at;
+        let me = ctx.actor_ref().clone();
+
+        tokio::spawn(async move {
+            tokio::time::sleep(STARVE).await;
+            let _ = me.tell(Starve { at }).await;
+        });
+
+        let text = format!(
+            "（你切到了 {} 的上下文）\n\n{}\n\n要说什么就现在说；它没有动静就回 normal。",
+            task.id,
+            brief::reading(&task)
+        );
+
+        self.answer(&text, None, ctx).await;
+    }
+}
+
+impl Message<ToNormal> for Odiva {
+    type Reply = ();
+
+    async fn handle(&mut self, _msg: ToNormal, _ctx: &mut Context<Self, Self::Reply>) {
+        self.leave_task("你回了 normal").await;
+    }
+}
+
+impl Message<Deadline> for Odiva {
+    type Reply = ();
+
+    async fn handle(&mut self, msg: Deadline, _ctx: &mut Context<Self, Self::Reply>) {
+        if self.active != msg.line || self.switch_at != msg.at {
+            return;
+        }
+
+        self.leave_task("它一直没有动静").await;
+    }
+}
+
+impl Message<Starve> for Odiva {
+    type Reply = ();
+
+    async fn handle(&mut self, msg: Starve, _ctx: &mut Context<Self, Self::Reply>) {
+        if self.starve_at != msg.at || !matches!(self.active, LineId::Task(_)) {
+            return;
+        }
+
+        self.leave_task("在里面待太久了").await;
     }
 }
 
@@ -290,12 +398,72 @@ impl Odiva {
             });
         }
 
+        if let LineId::Task(active) = self.active.clone()
+            && active != task.id
+        {
+            if let Err(error) = self
+                .note_for_normal(&format!("〔{}：{}〕", task.id, task.line()))
+                .await
+            {
+                self.journal.line(format!("写不了 normal 线：{error}"));
+            }
+
+            return;
+        }
+
+        if self.active == LineId::task(task.id.clone()) {
+            self.watch_again(ctx);
+        }
+
         let text = format!(
             "（后台的变化，不是对方说的）\n\n{}\n\n要不要说、说什么，你决定。",
             brief::reading(&task)
         );
 
         self.answer(&text, None, ctx).await;
+    }
+
+    /// A harness reaction is the reset the switch timeout is measured from.
+    fn watch_again(&mut self, ctx: &mut Context<Self, ()>) {
+        self.switch_at += 1;
+
+        let at = self.switch_at;
+        let line = self.active.clone();
+        let me = ctx.actor_ref().clone();
+        let timeout = self.switch_for;
+
+        tokio::spawn(async move {
+            tokio::time::sleep(timeout).await;
+            let _ = me.tell(Deadline { line, at }).await;
+        });
+    }
+
+    /// Back to the dispatcher of the current state.
+    async fn leave_task(&mut self, why: &str) {
+        let LineId::Task(id) = self.active.clone() else {
+            return;
+        };
+
+        self.active = LineId::normal(self.mode);
+        self.switch_at += 1;
+        self.starve_at += 1;
+
+        if let Err(error) = self
+            .note_for_normal(&format!("〔回到 normal：{id}，{why}〕"))
+            .await
+        {
+            self.journal.line(format!("写不了 normal 线：{error}"));
+        }
+    }
+
+    async fn note_for_normal(&self, text: &str) -> Result<()> {
+        let mut line = Line::open(
+            &self.store,
+            LineId::normal(self.mode),
+            &self.prompt,
+        )?;
+
+        line.push_note(text)
     }
 
     async fn answer(
@@ -326,15 +494,19 @@ impl Odiva {
         ctx: &mut Context<Self, ()>,
     ) -> Result<()> {
         let spoken = Spoken::default();
-        let busy = self.mode == Mode::Busy;
-        let id = LineId::normal(if busy { Mode::Busy } else { Mode::Idle });
+        let id = self.active.clone();
+
+        let position = match id {
+            LineId::Task(_) => tools::Position::Task,
+            LineId::Normal(_) => tools::Position::Normal,
+        };
 
         let mut talk = Talk::open(crate::talk::Activation {
             store: &self.store,
             id,
             route: &*self.route,
             prompt: &self.prompt,
-            roster: self.roster(ctx, &spoken, busy),
+            roster: self.roster(ctx, &spoken, self.mode, position),
             said: spoken,
             seed: None,
             halt: self.halt.clone(),
@@ -384,6 +556,9 @@ impl Odiva {
     /// A user task was accepted: the mode is no longer a guess.
     async fn enter_busy(&mut self, _task: String, handoff: Handoff) {
         self.mode = Mode::Busy;
+        self.active = LineId::normal(Mode::Busy);
+        self.switch_at += 1;
+        self.starve_at += 1;
         self.handoff = Some(handoff.clone());
 
         let state = crate::state::State {
@@ -441,6 +616,9 @@ impl Odiva {
         }
 
         self.mode = Mode::Idle;
+        self.active = LineId::normal(Mode::Idle);
+        self.switch_at += 1;
+        self.starve_at += 1;
         self.journal.line("暂停：回到空闲");
 
         if let Err(error) = self.leave_busy().await {
@@ -561,7 +739,8 @@ impl Odiva {
         &self,
         ctx: &mut Context<Self, ()>,
         spoken: &Spoken,
-        busy: bool,
+        mode: Mode,
+        position: tools::Position,
     ) -> Roster {
         let mut tools: Vec<Box<dyn yoagent::types::AgentTool>> = vec![Box::new(Say::new(
             self.out.clone(),
@@ -572,10 +751,11 @@ impl Odiva {
         tools.extend(tools::roster(
             self.records.clone(),
             ctx.actor_ref().clone(),
-            if busy { Mode::Busy } else { Mode::Idle },
+            mode,
+            position,
         ));
 
-        if busy {
+        if mode == Mode::Busy {
             tools.push(Box::new(crate::idle::RequestIdle::new(
                 self.out.clone(),
                 self.asking.clone(),

@@ -11,7 +11,7 @@
 | **P1** | 拆出 `odiva-harness`：ACP 客户端、结构化 `Ask`、假 harness（`session/load` 与多轮会话留到 P3 的 `Run`） | `cargo test --workspace` 全绿，零行为变化 |
 | **P2** | `line/` + `transcript`：线改用 `yoagent::Session`，工具调用进历史；窗口记录单独一份 | 旧 engine 改跑在 normal-idle 上，现有 engine 测试全绿 |
 | **P3** | `Odiva` / `Ledger` / wire pump 三个新模块；删 `engine` `talk` `tasks` `parked` `waiting` | 599 行 engine 测试逐条迁移后通过 |
-| **P4** | 状态机、两条 normal 线 + 任务线、四个 roster、`Intent`、超时与饥饿、提问组件、提权策略（**进行中**：提问组件、`request_idle` 的暂停转换、提权四档策略、两套 normal roster、`accept_task`（含自写的交接与 `state.json`）已完成；任务线、开关线、switch 超时与饥饿未做。"问用户"那一档仍走她的 `task_permit`，尚未复用提问卡） | 转换载荷、超时回 normal、饥饿强制回、兴趣任务提权被拒、暂停三选项全路径 |
+| **P4** | 状态机、两条 normal 线 + 任务线、四个 roster、`Intent`、超时与饥饿、提问组件、提权策略（**进行中**：提问组件、`request_idle` 的暂停转换、提权四档策略、四个 roster、`accept_task`（含自写的交接与 `state.json`）、任务线与开关线、switch 超时与饥饿上限已完成。"问用户"那一档仍走她的 `task_permit`，尚未复用提问卡） | 转换载荷、超时回 normal、饥饿强制回、兴趣任务提权被拒、暂停三选项全路径 |
 | **P5** | 压缩、`view_history`、预算与 say 限流接上 | 压缩后 `HistoryDiverged` 不出现；预算只扣 idle 自触发 |
 | **P6** | `drive` 示例、README、注释清洗 | 人能跑的东西还在，注释占比 < 5% |
 

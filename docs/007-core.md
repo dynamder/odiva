@@ -72,6 +72,8 @@ busy→idle 没有交接文档：退回 idle 的全部内容都是推导物。
 | `dispatch` | 兴趣 | — | 用户 | — |
 | `task_list` | ✔ | — | ✔ | — |
 | `task_read` | ✔ | ✔ | ✔ | ✔ |
+| `switch_to_task` | 兴趣 | — | 用户 | — |
+| `switch_to_normal` | — | ✔ | — | ✔ |
 | `task_instruct` | — | ✔ | — | ✔ |
 | `task_permit` | — | — | — | ✔ |
 | `task_cancel` | — | ✔ | — | ✔ |
