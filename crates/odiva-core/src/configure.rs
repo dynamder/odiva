@@ -74,7 +74,8 @@ fn unwritable_home() -> Option<String> {
             None
         }
         Err(error) => Some(format!(
-            "DSH_HOME {} 不可写（{error}）：dsh 启动会在 cordis.yml 上失败。把 ODIVA_DSH_HOME 指到一个可写目录",
+            "DSH_HOME {} 不可写（{error}）：dsh 每次启动都要写 profiles/<name>/cordis.yml，会在握手前退出。\
+             从沙箱外的终端启动 odiva（在 DSH 沙箱里 ~/.dsh 是只读的），或把 ODIVA_DSH_HOME 指到一个可写目录",
             home.display()
         )),
     }
