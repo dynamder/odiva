@@ -49,11 +49,13 @@ const STARVE: std::time::Duration = std::time::Duration::from_secs(30 * 60);
 
 /// What a run reported, and what it needs answered.
 pub enum Event {
-    /// A harness stopped on a permission request.
+    /// A harness stopped on a permission request. `escalate` marks the ones the
+    /// policy says only the person may answer.
     Asked {
         task: String,
         ask: odiva_harness::Ask,
         answer: oneshot::Sender<Decision>,
+        escalate: bool,
     },
     /// A run ended, one way or another.
     Ended {
@@ -109,6 +111,14 @@ pub struct Starve {
     pub at: u64,
 }
 
+/// The person answered a permission question.
+pub struct AnswerEscalation {
+    pub option: usize,
+}
+
+/// Nobody is going to answer a permission question.
+pub struct WithdrawAsk;
+
 pub struct Setup {
     pub store: Store,
     pub route: Arc<dyn Route>,
@@ -142,6 +152,7 @@ pub struct Odiva {
     asking: Asking,
     halt: Halt,
     handoff: Option<Handoff>,
+    escalated: Option<String>,
     runs: HashMap<String, Run>,
     permits: HashMap<String, oneshot::Sender<Decision>>,
     next_run: u64,
@@ -173,6 +184,7 @@ impl Actor for Odiva {
             asking: args.asking,
             halt: args.halt,
             handoff,
+            escalated: None,
             runs: HashMap::new(),
             permits: HashMap::new(),
             next_run: 0,
@@ -202,6 +214,59 @@ impl Message<Fill> for Odiva {
 
     async fn handle(&mut self, _fill: Fill, ctx: &mut Context<Self, Self::Reply>) {
         self.fill(ctx).await;
+    }
+}
+
+impl Message<AnswerEscalation> for Odiva {
+    type Reply = ();
+
+    async fn handle(&mut self, msg: AnswerEscalation, _ctx: &mut Context<Self, Self::Reply>) {
+        let Some(task) = self.escalated.take() else {
+            return;
+        };
+
+        let Some(answer) = self.permits.remove(&task) else {
+            return;
+        };
+
+        let allow = msg.option == 0;
+        let _ = answer.send(if allow {
+            Decision::Allow
+        } else {
+            Decision::Refuse
+        });
+
+        self.journal.line(format!(
+            "任务 {task}：对方{}",
+            if allow { "批准了" } else { "拒绝了" }
+        ));
+
+        self.emit(CoreMessage::QuestionClosed {
+            resolution: Resolution::Answered,
+        });
+
+        if let Some(mut record) = self.lookup(&task).await {
+            record.status = Status::OnHarness;
+            self.update(record).await;
+        }
+    }
+}
+
+impl Message<WithdrawAsk> for Odiva {
+    type Reply = ();
+
+    async fn handle(&mut self, _msg: WithdrawAsk, _ctx: &mut Context<Self, Self::Reply>) {
+        let Some(task) = self.escalated.take() else {
+            return;
+        };
+
+        if let Some(answer) = self.permits.remove(&task) {
+            let _ = answer.send(Decision::Refuse);
+        }
+
+        self.emit(CoreMessage::QuestionClosed {
+            resolution: Resolution::Withdrawn,
+        });
     }
 }
 
@@ -351,7 +416,12 @@ impl Message<Event> for Odiva {
 
     async fn handle(&mut self, event: Event, ctx: &mut Context<Self, Self::Reply>) {
         match event {
-            Event::Asked { task, ask, answer } => {
+            Event::Asked {
+                task,
+                ask,
+                answer,
+                escalate,
+            } => {
                 self.journal
                     .line(format!("任务 {task}：等你批准 {}", ask.title));
 
@@ -361,6 +431,15 @@ impl Message<Event> for Odiva {
                 }
 
                 self.permits.insert(task.clone(), answer);
+
+                if escalate {
+                    self.escalated = Some(task.clone());
+                    self.emit(CoreMessage::QuestionAsked {
+                        question: self.escalation(&task, &ask),
+                    });
+                    return;
+                }
+
                 self.notice(&task, ctx).await;
             }
             Event::Ended {
@@ -421,6 +500,23 @@ impl Odiva {
         );
 
         self.answer(&text, None, ctx).await;
+    }
+
+    /// What the person is asked about a permission request.
+    fn escalation(&self, task: &str, ask: &odiva_harness::Ask) -> odiva_proto::Question {
+        odiva_proto::Question {
+            question: format!("{task} 想「{}」。允许吗？", ask.title),
+            options: vec![
+                odiva_proto::QuestionOption {
+                    label: "允许这一次".to_owned(),
+                    note: None,
+                },
+                odiva_proto::QuestionOption {
+                    label: "拒绝".to_owned(),
+                    note: None,
+                },
+            ],
+        }
     }
 
     /// A harness reaction is the reset the switch timeout is measured from.
@@ -857,10 +953,16 @@ pub fn start(
                     let _ = odiva.tell(Heard).await;
                 }
                 UiMessage::AnswerQuestion(answer) => {
-                    if asking.answer(answer) {
+                    if asking.answer(answer.clone()) {
                         let _ = pump_out.send(CoreMessage::QuestionClosed {
                             resolution: Resolution::Answered,
                         });
+                    } else {
+                        let _ = odiva
+                            .tell(AnswerEscalation {
+                                option: answer.option,
+                            })
+                            .await;
                     }
                 }
                 UiMessage::UserRequestedStop => {
@@ -868,6 +970,8 @@ pub fn start(
                         let _ = pump_out.send(CoreMessage::QuestionClosed {
                             resolution: Resolution::Withdrawn,
                         });
+                    } else {
+                        let _ = odiva.tell(WithdrawAsk).await;
                     }
 
                     turn.cancel();

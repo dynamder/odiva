@@ -84,14 +84,6 @@ fn accepting(brief: &str, handoff: &str, workspace: &str) -> MockResponse {
     }])
 }
 
-fn permitting(id: &str, allow: bool) -> MockResponse {
-    MockResponse::ToolCalls(vec![MockToolCall {
-        name: "task_permit".to_owned(),
-        arguments: json!({ "id": id, "allow": allow }),
-        provider_metadata: None,
-    }])
-}
-
 /// Waits for the one task on disk to stop running, and returns it.
 async fn settled(store: &Store) -> Task {
     for _ in 0..400 {
@@ -765,21 +757,17 @@ async fn a_task_that_asks_waits_for_words() {
 }
 
 #[tokio::test]
-async fn a_permission_request_reaches_her_and_the_answer_goes_back() {
+async fn a_permission_request_reaches_the_person_and_the_answer_goes_back() {
     let store = scratch("engine-permit");
     let workspace = store.root().join("ws");
     let workspace = workspace.to_str().expect("a path");
 
-    let (handle, _inbox) = scripted_with(
-        vec![
-            vec![
-                accepting("删掉 migrate_v1.sh", "正在整理记忆", workspace),
-                saying("接了。"),
-                done(),
-            ],
-            vec![switching("t1", 600), done()],
-            vec![permitting("t1", false), done()],
-        ],
+    let (handle, mut inbox) = scripted_with(
+        vec![vec![
+            accepting("删掉 migrate_v1.sh", "正在整理记忆", workspace),
+            saying("接了。"),
+            done(),
+        ]],
         &store,
         "permission",
     );
@@ -787,6 +775,21 @@ async fn a_permission_request_reaches_her_and_the_answer_goes_back() {
     handle.send(UiMessage::UserSubmittedText {
         text: "把那个脚本处理掉".to_owned(),
     });
+
+    let asked = drain_until(&mut inbox, |message| {
+        matches!(message, CoreMessage::QuestionAsked { question } if question.question.contains("migrate_v1.sh"))
+    })
+    .await;
+
+    assert!(
+        asked,
+        "an escalation the policy will not touch becomes a question"
+    );
+
+    handle.send(UiMessage::AnswerQuestion(Answer {
+        option: 1,
+        note: None,
+    }));
 
     let task = settled(&store).await;
 

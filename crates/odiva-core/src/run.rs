@@ -65,7 +65,8 @@ impl Permission for Policy {
         match classify(ask, &self.roots, self.origin) {
             Verdict::Allow => Decision::Allow,
             Verdict::Deny(_) => Decision::Refuse,
-            Verdict::AgentMayDecide | Verdict::AskUser(_) => self.ask(ask).await,
+            Verdict::AgentMayDecide => self.ask(ask, false).await,
+            Verdict::AskUser(_) => self.ask(ask, true).await,
         }
     }
 }
@@ -74,7 +75,7 @@ impl Policy {
     /// Carries the question to whoever can answer it. While she is inside a
     /// turn, the answer waits for that turn to end; the worker waits too, which
     /// is what "stopped on a question" means.
-    async fn ask(&self, ask: &Ask) -> Decision {
+    async fn ask(&self, ask: &Ask, escalate: bool) -> Decision {
         let (answer, told) = oneshot::channel();
 
         let sent = self
@@ -83,6 +84,7 @@ impl Policy {
                 task: self.task.clone(),
                 ask: ask.clone(),
                 answer,
+                escalate,
             })
             .await;
 
