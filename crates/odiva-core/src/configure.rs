@@ -12,7 +12,7 @@ use std::net::{IpAddr, SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use odiva_harness::Harness;
+use odiva_harness::{Harness, candidates};
 
 pub fn harness() -> Harness {
     let program = env::var("ODIVA_HARNESS").unwrap_or_else(|_| "dsh".to_owned());
@@ -55,8 +55,46 @@ pub fn diagnostics() -> Vec<String> {
     }
 
     lines.extend(proxy());
+    lines.extend(desktop_shim());
 
     lines
+}
+
+/// Whether the harness would run inside the desktop app's own sandbox.
+///
+/// The desktop install puts its launcher on `PATH` ahead of any standalone CLI,
+/// and that launcher boots the profile through the app — with the app's sandbox,
+/// where `~/.dsh` is read-only. So `dsh` on this machine is not a harness: it
+/// fails at the handshake, saying EPERM on `profiles/<name>/cordis.yml`.
+fn desktop_shim() -> Option<String> {
+    let program = env::var("ODIVA_HARNESS").unwrap_or_else(|_| "dsh".to_owned());
+
+    if !program.to_lowercase().contains("dsh") {
+        return None;
+    }
+
+    let found = candidates(Path::new(&program));
+    let shim = found.iter().find(|path| is_desktop(path))?;
+
+    Some(match found.iter().find(|path| !is_desktop(path)) {
+        Some(standalone) => format!(
+            "harness 解析到桌面版的 {}：它在桌面应用自己的沙箱里跑 profile，~/.dsh 只读。\
+             改用独立 CLI：ODIVA_HARNESS={}",
+            shim.display(),
+            standalone.display()
+        ),
+        None => format!(
+            "harness 解析到桌面版的 {}：它在桌面应用自己的沙箱里跑 profile，~/.dsh 只读。\
+             装一个独立的 dsh（npm i -g @deepseek-ai/dsh），或把 ODIVA_DSH_HOME 指到一个可写目录",
+            shim.display()
+        ),
+    })
+}
+
+/// A launcher that boots through the desktop host, which is where the sandbox
+/// boundary comes from.
+fn is_desktop(path: &Path) -> bool {
+    std::fs::read_to_string(path).is_ok_and(|text| text.contains("dsh-desktop-host"))
 }
 
 /// A startup warning when dsh's own home would stop it from booting.

@@ -76,10 +76,13 @@ worker 自己的环境：`ODIVA_TASK_DIR`、`ODIVA_TASK_ID`，以及 harness 侧
 `cargo run -p odiva-core --example doctor` 只做握手 + `session/new`，不花一个 token，就能确认
 程序解析、`.cmd` 启动器、协议、目录都对。
 
-能跑起来却拿不到答案的两种情形，odiva 在启动时就把原因写进日志（`configure::diagnostics`）：
-`DSH_HOME` 不可写（dsh 每次启动都写 `cordis.yml`，会在握手前退出），以及 `HTTPS_PROXY` /
-`HTTP_PROXY` / `ALL_PROXY` 指着一个没人应答的端口——brain 走 `reqwest`，它自己读这些变量，
-于是请求打到一个本地死端口，报出来是"tcp connect error 127.0.0.1:7900"，看着像断网。
+能跑起来却拿不到答案的三种情形，odiva 在启动时就把原因写进日志（`configure::diagnostics`）：
+`DSH_HOME` 不可写（dsh 每次启动都写 `cordis.yml`，会在握手前退出）、`HTTPS_PROXY` /
+`HTTP_PROXY` / `ALL_PROXY` 指着一个没人应答的端口（brain 走 `reqwest`，它自己读这些变量，
+于是请求打到一个本地死端口，报出来是"tcp connect error 127.0.0.1:7900"，看着像断网），
+以及 `dsh` 解析到了桌面版的启动器。最后一种是安装桌面版之后最容易踩的：桌面版把自己放在
+`PATH` 前面，那个启动器会把 profile 起在桌面应用自己的沙箱里，`~/.dsh` 因此只读，握手前就 EPERM。
+把 `ODIVA_HARNESS` 指到独立的 CLI，日志里会直接给出它的路径。
 
 ## 暂停与恢复
 

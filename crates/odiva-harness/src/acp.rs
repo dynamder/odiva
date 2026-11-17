@@ -454,12 +454,21 @@ impl Worker {
 /// not try `PATHEXT`. So a bare name is looked up on `PATH` for an executable
 /// this process can actually start.
 fn resolve(program: &Path) -> PathBuf {
+    candidates(program)
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| program.to_path_buf())
+}
+
+/// Every program a bare name could mean, in the order `PATH` offers them, so a
+/// caller can see what the first one hid.
+pub fn candidates(program: &Path) -> Vec<PathBuf> {
     if program.extension().is_some() {
-        return program.to_path_buf();
+        return vec![program.to_path_buf()];
     }
 
     let Some(paths) = std::env::var_os("PATH") else {
-        return program.to_path_buf();
+        return vec![program.to_path_buf()];
     };
 
     let extensions: &[&str] = if cfg!(windows) {
@@ -468,23 +477,29 @@ fn resolve(program: &Path) -> PathBuf {
         &[]
     };
 
+    let mut found = Vec::new();
+
     for directory in std::env::split_paths(&paths) {
         for extension in extensions {
             let candidate = directory.join(format!("{}.{extension}", program.display()));
 
             if candidate.is_file() {
-                return candidate;
+                found.push(candidate);
             }
         }
 
         let bare = directory.join(program);
 
         if bare.is_file() {
-            return bare;
+            found.push(bare);
         }
     }
 
-    program.to_path_buf()
+    if found.is_empty() {
+        found.push(program.to_path_buf());
+    }
+
+    found
 }
 
 /// Answers by name, never by position: the narrow form of whatever was decided,

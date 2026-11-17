@@ -44,6 +44,11 @@ The window owns no conversation: `ODIVA_HOME` says where the core keeps its line
 (defaults to `dsh --profile acp`), with `ODIVA_DSH_HOME` / `ODIVA_DSH_PERMISSION_MODE`
 for dsh itself.
 
+A bare `dsh` is whatever `PATH` finds first, and on a machine with the desktop app
+installed that is the desktop launcher, which boots the profile inside the app's own
+sandbox — where `~/.dsh` is read-only, so every handshake dies with EPERM. Point
+`ODIVA_HARNESS` at a standalone CLI instead; `doctor` says so when it sees this.
+
 Before trusting the wiring, ask it one question that costs nothing:
 
 ```sh

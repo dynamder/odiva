@@ -7,6 +7,6 @@ pub mod acp;
 pub mod error;
 pub mod harness;
 
-pub use acp::{Ask, Decision, Permission, Refuse, Stop, Tool, Turn, Worker};
+pub use acp::{Ask, Decision, Permission, Refuse, Stop, Tool, Turn, Worker, candidates};
 pub use error::{Error, Result};
 pub use harness::Harness;
