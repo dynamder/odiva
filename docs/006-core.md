@@ -27,8 +27,8 @@ worker 的 patch 默认关掉 `tool-subagent`、`tool-subagent-fork`、`tool-job
 | --- | --- |
 | `agent_loop()` 无状态；`Agent` 是便捷构造器 | 一轮 = 构建、跑到边界、写回、丢弃 |
 | `Session` 树 + JSONL + `append_new` | 线的磁盘格式就是它；entry 自带 id / parent / AgentMessage |
-| `ToolSource` | 不再需要（`yield` 已删）；工具表按 roster 静态构建 |
-| `steer` | 用户消息在她轮中途到达时，往里塞一句"对方在等"，不是取消 |
+| `ToolSource` | 不再需要；工具表按 roster 静态构建 |
+| `TurnHook`（`before_model` 的备注） | 用户消息在她轮中途到达时，下一次模型请求带一句"对方在等"，不是取消 |
 | `Extension` / `RunHooks`（`before_model` → `TurnDecision::Stop`） | 暂停同意后"本轮不再请求模型"的实现手段 |
 | `RunHooks::finish` 的 `RunEnd`（`Completed` / `Cancelled` / `Stopped` / `Failed`） | 判断这一轮怎么结束，取代扫消息猜失败或沉默 |
 | `CompactionStrategy` / `LlmCompaction` | 备选；我们仍然在循环外压缩，省掉 `HistoryDiverged` |
