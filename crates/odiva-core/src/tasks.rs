@@ -244,7 +244,7 @@ impl Tasks {
         };
 
         let handle = tokio::spawn(async move {
-            let outcome = worker.talk(&prompt, permission).await;
+            let outcome = worker.talk(&prompt, permission).await.map_err(crate::Error::from);
             tasks.settle(&id, outcome);
         });
 

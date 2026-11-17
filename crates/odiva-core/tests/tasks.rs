@@ -1,5 +1,7 @@
 //! The ledger, and what a worker's last turn meant.
 
+mod support;
+
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -15,7 +17,7 @@ fn scratch(name: &str) -> PathBuf {
 }
 
 fn harness(script: &str) -> Harness {
-    Harness::new(env!("CARGO_BIN_EXE_fake_harness")).env("ODIVA_FAKE_SCRIPT", script)
+    Harness::new(support::fake_harness()).env("ODIVA_FAKE_SCRIPT", script)
 }
 
 /// Waits until the task stops holding a slot, or gives up.

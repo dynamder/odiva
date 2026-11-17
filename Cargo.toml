@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/ericed", "crates/odiva-proto", "crates/odiva", "crates/odiva-core"]
+members = ["crates/ericed", "crates/odiva-proto", "crates/odiva-harness", "crates/odiva", "crates/odiva-core"]
 resolver = "3"
 
 [workspace.package]
@@ -50,5 +50,6 @@ yoagent = "0.27"
 
 ericed = { path = "crates/ericed" }
 odiva-proto = { path = "crates/odiva-proto" }
+odiva-harness = { path = "crates/odiva-harness" }
 odiva-core = { path = "crates/odiva-core" }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }

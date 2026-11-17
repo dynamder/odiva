@@ -3039,15 +3039,26 @@ dependencies = [
 name = "odiva-core"
 version = "0.1.0"
 dependencies = [
- "agent-client-protocol",
  "async-trait",
  "chrono",
+ "odiva-harness",
  "odiva-proto",
  "serde",
  "serde_json",
  "tokio",
  "tokio-util",
  "yoagent",
+]
+
+[[package]]
+name = "odiva-harness"
+version = "0.1.0"
+dependencies = [
+ "agent-client-protocol",
+ "async-trait",
+ "serde_json",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]

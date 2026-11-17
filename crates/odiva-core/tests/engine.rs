@@ -1,5 +1,7 @@
 //! The engine, driven through the window's wire.
 
+mod support;
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -37,7 +39,7 @@ fn done() -> MockResponse {
 }
 
 fn harness(script: &str) -> Harness {
-    Harness::new(env!("CARGO_BIN_EXE_fake_harness")).env("ODIVA_FAKE_SCRIPT", script)
+    Harness::new(support::fake_harness()).env("ODIVA_FAKE_SCRIPT", script)
 }
 
 fn scripted(

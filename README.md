@@ -69,11 +69,10 @@ only thing that can change the transcript is still `App::apply`.
 
 **The docs are ahead of the code.** `docs/007-core.md` is the agreed model; the code is
 still on the old one (an engine that builds a short-lived activation per turn and derives
-"busy" from the ledger). [003](docs/003-plan.md) lists the migration: P1 splits ACP out into
-`odiva-harness`, P2 moves lines onto `yoagent::Session`, P3 replaces the engine with the
-`Odiva`/`Ledger` actors, P4 adds the state machine and the four rosters, P5 adds compaction
-and `view_history`. Until P1 lands, `crates/odiva-harness` does not exist yet and
-`crates/odiva-core` is the old engine.
+"busy" from the ledger). [003](docs/003-plan.md) lists the migration: P1 is done (the ACP
+client is its own crate), P2 moves lines onto `yoagent::Session`, P3 replaces the engine
+with the `Odiva`/`Ledger` actors, P4 adds the state machine and the four rosters, P5 adds
+compaction and `view_history`.
 
 A turn still needs a harness on `PATH` and a model credential; without them the
 window opens and attaches, and a turn fails with a sentence on stderr.

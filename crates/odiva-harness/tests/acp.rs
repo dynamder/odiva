@@ -7,7 +7,7 @@
 
 use std::time::Duration;
 
-use odiva_core::acp::{Stop, Turn, Worker};
+use odiva_harness::{Stop, Turn, Worker};
 
 const TIMEOUT: Duration = Duration::from_secs(20);
 

@@ -18,7 +18,7 @@ use agent_client_protocol::v1::SessionMessage;
 use agent_client_protocol::v1::schema::{
     ContentBlock, ContentChunk, InitializeRequest, PermissionOption, PermissionOptionKind,
     RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
-    SelectedPermissionOutcome, SessionNotification, SessionUpdate, StopReason,
+    SelectedPermissionOutcome, SessionNotification, SessionUpdate, StopReason, ToolKind,
 };
 use agent_client_protocol::{ByteStreams, Client, on_receive_request};
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
@@ -60,9 +60,51 @@ impl From<StopReason> for Stop {
 }
 
 /// What a worker wants to do that it may not do on its own.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// Structured on purpose: an escalation policy has to know *what* is being
+/// asked — the kind of tool, the paths, the raw input — not just a sentence.
+#[derive(Debug, Clone, PartialEq)]
 pub struct Ask {
+    /// The harness's own wording, for whoever has to read it.
     pub title: String,
+    /// What kind of thing it wants to do, when the harness says.
+    pub tool: Option<Tool>,
+    /// The paths it says it wants to touch.
+    pub locations: Vec<PathBuf>,
+    /// The arguments it wants to run with, verbatim.
+    pub input: Option<serde_json::Value>,
+}
+
+/// A tool kind, without the protocol's type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tool {
+    Read,
+    Edit,
+    Delete,
+    Move,
+    Search,
+    Execute,
+    Think,
+    Fetch,
+    SwitchMode,
+    Other,
+}
+
+impl From<ToolKind> for Tool {
+    fn from(kind: ToolKind) -> Self {
+        match kind {
+            ToolKind::Read => Self::Read,
+            ToolKind::Edit => Self::Edit,
+            ToolKind::Delete => Self::Delete,
+            ToolKind::Move => Self::Move,
+            ToolKind::Search => Self::Search,
+            ToolKind::Execute => Self::Execute,
+            ToolKind::Think => Self::Think,
+            ToolKind::Fetch => Self::Fetch,
+            ToolKind::SwitchMode => Self::SwitchMode,
+            _ => Self::Other,
+        }
+    }
 }
 
 /// What the core says to it.
@@ -193,13 +235,20 @@ impl Worker {
             .on_receive_request(
                 async move |request: RequestPermissionRequest, responder, _connection| {
                     let permission = Arc::clone(&asked);
+                    let fields = &request.tool_call.fields;
                     let ask = Ask {
-                        title: request
-                            .tool_call
-                            .fields
+                        title: fields
                             .title
                             .clone()
                             .unwrap_or_else(|| "要动工作区之外的什么东西".to_owned()),
+                        tool: fields.kind.map(Tool::from),
+                        locations: fields
+                            .locations
+                            .iter()
+                            .flatten()
+                            .map(|location| location.path.clone())
+                            .collect(),
+                        input: fields.raw_input.clone(),
                     };
                     let options = request.options.clone();
 

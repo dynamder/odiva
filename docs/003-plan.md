@@ -8,7 +8,7 @@
 | 阶段 | 内容 | 验收 |
 | --- | --- | --- |
 | **P0** | 文档改写：README + 000–007 全部对齐新设计 | 只有一份模型描述，没有互相矛盾的段落 |
-| **P1** | 拆出 `odiva-harness`：ACP 会话、`Run`、结构化 `Ask`、`session/load` 探测 | `cargo test --workspace` 全绿，零行为变化 |
+| **P1** | 拆出 `odiva-harness`：ACP 客户端、结构化 `Ask`、假 harness（`session/load` 与多轮会话留到 P3 的 `Run`） | `cargo test --workspace` 全绿，零行为变化 |
 | **P2** | `line/` + `transcript`：线改用 `yoagent::Session`，工具调用进历史；窗口记录单独一份 | 旧 engine 改跑在 normal-idle 上，现有 engine 测试全绿 |
 | **P3** | `Odiva` / `Ledger` / wire pump 三个新模块；删 `engine` `talk` `tasks` `parked` `waiting` | 599 行 engine 测试逐条迁移后通过 |
 | **P4** | 状态机、两条 normal 线 + 任务线、四个 roster、`Intent`、超时与饥饿、提问组件、提权策略 | 转换载荷、超时回 normal、饥饿强制回、兴趣任务提权被拒、暂停三选项全路径 |
@@ -33,13 +33,14 @@ P4 之前就能验证最关键的假设：**状态是她的决定、线是记录
 | | 状态 |
 | --- | --- |
 | `crates/odiva-proto` | 四个 `CoreMessage` + 两个 `UiMessage`；提问组件尚未加（P4） |
+| `crates/odiva-harness` | **P1 完成**：ACP 客户端、结构化 `Ask`、`Harness`、假 harness 与它的测试 |
 | `crates/odiva` | 聊天窗口：markdown、文件、快捷回复、时间分隔、虚拟化、贴底与跟随；接上 core |
-| `crates/odiva-core` | 旧模型：engine、talk 线、任务台账、五个任务工具、假 harness |
+| `crates/odiva-core` | 旧模型：engine、talk 线、任务台账、五个任务工具（ACP 已移出） |
 | `crates/ericed` | vendor 自 `../sofaia`，编译通过，示例自带断言 |
 | 文档 | P0 完成：007 是新设计的唯一出处 |
 
 代码仍在旧模型上（`Engine` 每轮一次激活、从台账推导忙碌），与新文档的差异见
-[007](007-core.md) §13 的对照表。P1 开始按上面的顺序改。
+[007](007-core.md) §13 的对照表。P2 开始改线的存储。
 
 ## 阻塞（不是设计问题）
 

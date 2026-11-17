@@ -35,9 +35,9 @@ impl From<yoagent::session::SessionError> for Error {
     }
 }
 
-impl From<agent_client_protocol::Error> for Error {
-    fn from(error: agent_client_protocol::Error) -> Self {
-        Self::Harness(format!("{error:?}"))
+impl From<odiva_harness::Error> for Error {
+    fn from(error: odiva_harness::Error) -> Self {
+        Self::Harness(error.to_string())
     }
 }
 
