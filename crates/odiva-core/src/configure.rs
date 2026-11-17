@@ -124,16 +124,24 @@ fn unwritable_home() -> Option<String> {
         home.display()
     );
 
-    if let Some(parent) = home.parent()
-        && probe(parent).is_err()
-    {
-        line.push_str(&format!(
-            "；连 {} 也写不了，所以不是 .dsh 的 ACL，是这个进程本身受限",
-            parent.display()
-        ));
-    }
+    line.push_str(&match writable_elsewhere() {
+        Some(where_) => format!(
+            "；{where_} 写得进去，所以被拦的是这个路径，不是进程：多半是第三方防护（火绒 / Defender）\
+             或组策略按路径拦截，把 odiva 和它派出的 dsh 加进信任"
+        ),
+        None => "；工作目录也写不了，是这个进程整体受限".to_owned(),
+    });
 
     Some(line)
+}
+
+/// A place this process can write that is not the harness home, if there is one.
+fn writable_elsewhere() -> Option<String> {
+    let here = std::env::current_dir().ok()?;
+
+    probe(&here).ok()?;
+
+    Some(here.display().to_string())
 }
 
 /// Where dsh keeps its home, and which variable said so.
