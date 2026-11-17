@@ -12,8 +12,9 @@
 | **P2** | `line/` + `transcript`：线改用 `yoagent::Session`，工具调用进历史；窗口记录单独一份 | 旧 engine 改跑在 normal-idle 上，现有 engine 测试全绿 |
 | **P3** | `Odiva` / `Ledger` / wire pump 三个新模块；删 `engine` `talk` `tasks` `parked` `waiting` | 599 行 engine 测试逐条迁移后通过 |
 | **P4** | 状态机、两条 normal 线 + 任务线、四个 roster、`Intent`、超时与饥饿、提问组件、提权策略（已完成：提问组件、`request_idle` 的暂停转换、提权四档（"问用户"那一档走同一张提问卡，答复直接回给 Run）、四个 roster、`accept_task`（自写交接 + `state.json`）、任务线与开关线、switch 超时与饥饿上限） | 转换载荷、超时回 normal、饥饿强制回、兴趣任务提权被拒、暂停三选项全路径 |
-| **P5** | 压缩、`view_history`、预算与 say 限流接上（**进行中**：`view_history` 与模型摘要压缩已完成——摘要模型可注入，失败退回确定性残渣；预算与 `say` 限流、idle 自唤醒未接） | 压缩后 `HistoryDiverged` 不出现；预算只扣 idle 自触发 |
-| **P6** | `drive` 示例、README、注释清洗 | 人能跑的东西还在，注释占比 < 5% |
+| **P5** | 压缩与 `view_history`（**核心完成**：摘要模型可注入、失败退回确定性残渣；`view_history` 跨代只读自己的线）| 压缩后 `HistoryDiverged` 不出现；历史可回读 |
+| **P5b** | 预算与 `say` 限流、idle 自唤醒（让 idle 真的按需醒来） | 预算只扣 idle 自触发；限流只在主动开口时生效 |
+| **P6** | `drive` 示例、README、注释只留"为什么" | 人能跑的东西还在；没有解释"是什么"的注释 |
 
 每个阶段都可编译、可跑、可提交；一个阶段 1–3 个 conventional commit。
 
@@ -35,13 +36,12 @@ P4 之前就能验证最关键的假设：**状态是她的决定、线是记录
 | `crates/odiva-proto` | 四个 `CoreMessage` + 两个 `UiMessage`；提问组件尚未加（P4） |
 | `crates/odiva-harness` | **P1 完成**：ACP 客户端、结构化 `Ask`、`Harness`、假 harness 与它的测试 |
 | `crates/odiva` | 聊天窗口：markdown、文件、快捷回复、时间分隔、虚拟化、贴底与跟随；接上 core |
-| `crates/odiva-core` | **P3 完成**：`Odiva` 与 `Records` 两个 actor 取代 engine 与 tasks；`line/` 用 `yoagent::Session` 存上下文，`transcript.jsonl` 单独记窗口的东西 |
+| `crates/odiva-core` | **P5 完成**：`Odiva` 与 `Records` 两个 actor；四条线、四个 roster、提问与提权、`view_history`、模型摘要压缩 |
 | `crates/ericed` | vendor 自 `../sofaia`，编译通过，示例自带断言 |
 | 文档 | P0 完成：007 是新设计的唯一出处 |
 | 提问 | P4 已落地：proto 的 `QuestionAsked` / `QuestionClosed` / `AnswerQuestion`，窗口的提问卡与禁用输入，core 的阻塞式 `request_idle` 与暂停清理（截图 `target/ui-chat-question.png`） |
 
-P4 之前的差异只剩状态机部分：忙碌仍由台账推导（没有 `accept_task` / `request_idle` 的转换），
-工具表还是两个而不是四个，提权还没有策略。P4 一次补齐。
+P6 只剩收尾：示例与 README 已改为新路径，剩下的是把"孤儿进程清理"这类操作细节补上或写进待定。
 
 ## 阻塞（不是设计问题）
 
@@ -63,3 +63,5 @@ P4 之前的差异只剩状态机部分：忙碌仍由台账推导（没有 `acc
 - 预算、配额、各定时器的默认数值。
 - 封存的任务线保留多久（`view_history` 能回溯多远）。
 - 用户"验收"的交互形态；同一 busy 期多个用户任务的排队与优先级。
+- 孤儿 harness 进程：`run` 目前不记子进程 `pid`，重启后不清理（Windows 上父进程被强杀不会带走子进程）。
+- idle 自唤醒的间隔与预算数值；`say` 限流的窗口。

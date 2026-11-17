@@ -25,6 +25,11 @@ impl TurnCancel {
         *self.current.lock().expect("no panic on the turn") = None;
     }
 
+    /// Whether a turn is in flight, which is what makes a new message "mid-turn".
+    pub fn running(&self) -> bool {
+        self.current.lock().expect("no panic on the turn").is_some()
+    }
+
     pub fn cancel(&self) {
         if let Some(token) = self.current.lock().expect("no panic on the turn").as_ref() {
             token.cancel();

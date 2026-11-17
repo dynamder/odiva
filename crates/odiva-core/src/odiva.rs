@@ -33,7 +33,7 @@ use crate::talk::Talk;
 use crate::task::{Outcome, Report, Status, Task};
 use crate::tools;
 use crate::transcript::Transcript;
-use crate::waiting::Waiting;
+use crate::told::Told;
 use crate::turn::TurnCancel;
 
 /// The context window compaction is measured against.
@@ -73,7 +73,9 @@ pub enum Event {
 }
 
 /// The person said something.
-pub struct Heard;
+pub struct Heard {
+    pub text: String,
+}
 
 /// Start every queued task the slots allow.
 pub struct Fill;
@@ -138,7 +140,7 @@ pub struct Setup {
     pub harness: Harness,
     pub journal: Journal,
     pub turn: TurnCancel,
-    pub waiting: Waiting,
+    pub told: Told,
     pub asking: Asking,
     pub halt: Halt,
 }
@@ -158,7 +160,7 @@ pub struct Odiva {
     switch_at: u64,
     switch_for: std::time::Duration,
     starve_at: u64,
-    waiting: Waiting,
+    told: Told,
     turn: TurnCancel,
     asking: Asking,
     halt: Halt,
@@ -191,7 +193,7 @@ impl Actor for Odiva {
             switch_at: 0,
             switch_for: std::time::Duration::from_secs(600),
             starve_at: 0,
-            waiting: args.waiting,
+            told: args.told,
             turn: args.turn,
             asking: args.asking,
             halt: args.halt,
@@ -207,17 +209,17 @@ impl Actor for Odiva {
 impl Message<Heard> for Odiva {
     type Reply = ();
 
-    async fn handle(&mut self, _heard: Heard, ctx: &mut Context<Self, Self::Reply>) {
-        while let Some(text) = self.waiting.next() {
-            self.journal.line(format!("对方：{text}"));
+    async fn handle(&mut self, heard: Heard, ctx: &mut Context<Self, Self::Reply>) {
+        let text = heard.text;
 
-            let user = self.ids.theirs(&text);
-            self.emit(CoreMessage::MessageAppended {
-                message: user.clone(),
-            });
+        self.journal.line(format!("对方：{text}"));
 
-            self.answer(&user.markdown, Some(&user), ctx).await;
-        }
+        let user = self.ids.theirs(&text);
+        self.emit(CoreMessage::MessageAppended {
+            message: user.clone(),
+        });
+
+        self.answer(&user.markdown, Some(&user), ctx).await;
     }
 }
 
@@ -620,6 +622,7 @@ impl Odiva {
             said: spoken,
             seed: None,
             halt: self.halt.clone(),
+            told: self.told.clone(),
         })?;
 
         if let Some(user) = user {
@@ -925,7 +928,7 @@ impl Odiva {
             )));
         }
 
-        Roster::of(tools).sourcing(Arc::new(self.waiting.clone()))
+        Roster::of(tools)
     }
 
     fn emit(&self, message: CoreMessage) {
@@ -995,7 +998,7 @@ pub fn start_with(
     });
 
     let turn = TurnCancel::default();
-    let waiting = Waiting::default();
+    let told = Told::default();
     let asking = Asking::default();
     let halt = Halt::default();
     let pump_out = out.clone();
@@ -1010,7 +1013,7 @@ pub fn start_with(
         harness,
         journal,
         turn: turn.clone(),
-        waiting: waiting.clone(),
+        told: told.clone(),
         asking: asking.clone(),
         halt,
     });
@@ -1021,8 +1024,11 @@ pub fn start_with(
         while let Some(message) = inbox.recv().await {
             match message {
                 UiMessage::UserSubmittedText { text } => {
-                    waiting.offer(text);
-                    let _ = odiva.tell(Heard).await;
+                    if turn.running() {
+                        told.tell();
+                    }
+
+                    let _ = odiva.tell(Heard { text }).await;
                 }
                 UiMessage::AnswerQuestion(answer) => {
                     if asking.answer(answer.clone()) {

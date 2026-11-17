@@ -243,7 +243,7 @@ memory/  odiva.log
 
 - **启动恒为 Idle**：`mode` 不持久化，`active = normal-idle`。于是"提问挂起时被杀"和"任何时候被杀"是同一条规则：世界已经停了。
 - 启动时把所有非终态任务标 `Paused`（不是 `Failed`），写进 idle 的注入里。
-- 按台账里的 `pid` 清掉仍存活的孤儿 harness 进程（Windows 上父进程被强杀不会带走子进程）。
+- 孤儿 harness 进程：目前不清理（没有记 `pid`），见 003 的待定。
 - 各类 deadline 不恢复；挂起中的提问作废（窗口没有它，输入框自然可用）。
 
 ## 13 旧模型里作废的结论
@@ -255,6 +255,6 @@ memory/  odiva.log
 | 状态 = 有没有未完成的用户任务 | 状态是她的决定，由 `accept_task` / `request_idle` 驱动 |
 | 线只存 `WireMessage` | 线存完整 `AgentMessage`；窗口记录单独一份 |
 | 交接由 `Handoff::of` 从最后一条用户消息推导 | 交接由 `accept_task` 的参数给出，形状由类型保证 |
-| `yield` / `cancel_yield` 让出本轮 | 删除：她自愿收尾就是轮结束；`steer` 负责提醒有人等 |
+| `yield` / `cancel_yield` 让出本轮 | 删除：她自愿收尾就是轮结束；有人等这件事由一次 `before_model` 的备注说一次 |
 | 提权归窗口，"不是你的决定" | 四档策略；中间一档她自己批，严重的只问用户 |
 | 会话一问一进程 | 进程在任务在飞期间保留，暂停时走 ACP cancel 再杀 |

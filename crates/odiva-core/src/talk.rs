@@ -12,6 +12,7 @@ use yoagent::types::{AgentMessage, Content, Message, StopReason};
 
 use crate::error::Result;
 use crate::halt::Halt;
+use crate::told::{Note, Told};
 use crate::line::{Line, LineId};
 use crate::roster::Roster;
 use crate::route::Route;
@@ -31,6 +32,7 @@ pub struct Activation<'a> {
     /// used when the line has never carried a message.
     pub seed: Option<String>,
     pub halt: Halt,
+    pub told: Told,
 }
 
 /// A conversation with its history loaded and its roster installed.
@@ -53,6 +55,7 @@ impl Talk {
             said,
             seed,
             halt,
+            told,
         } = activation;
 
         let mut line = Line::open(store, id, prompt)?;
@@ -65,7 +68,7 @@ impl Talk {
 
         halt.clear();
 
-        let agent = assemble(route, prompt, roster, &line.messages(), halt);
+        let agent = assemble(route, prompt, roster, &line.messages(), halt, told);
 
         Ok(Self {
             agent,
@@ -208,6 +211,7 @@ fn assemble(
     roster: Roster,
     messages: &[AgentMessage],
     halt: Halt,
+    told: Told,
 ) -> Agent {
     roster.install(
         route
@@ -215,6 +219,7 @@ fn assemble(
             .with_system_prompt(prompt)
             .with_messages(messages.to_vec())
             .with_extension(halt)
+            .with_turn_hook(Note::new(told))
             .without_context_management(),
     )
 }

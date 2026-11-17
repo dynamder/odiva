@@ -27,10 +27,10 @@ pub mod state;
 pub mod store;
 pub mod talk;
 pub mod task;
+pub mod told;
 pub mod tools;
 pub mod transcript;
 pub mod turn;
-pub mod waiting;
 
 pub use budget::Budget;
 pub use error::{Error, Result};
@@ -47,5 +47,5 @@ pub use state::State;
 pub use store::Store;
 pub use talk::Talk;
 pub use task::{Ledger, Origin, Outcome, Report, Status, Task};
+pub use told::Told;
 pub use transcript::Transcript;
-pub use waiting::Waiting;

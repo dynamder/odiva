@@ -81,6 +81,7 @@ fn opening(
         said: said.clone(),
         seed,
         halt: Halt::default(),
+        told: odiva_core::Told::default(),
     })
     .expect("a line")
 }
