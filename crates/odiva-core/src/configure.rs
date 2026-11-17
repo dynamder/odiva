@@ -9,7 +9,7 @@
 
 use std::env;
 use std::net::{IpAddr, SocketAddr, TcpStream};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use odiva_harness::Harness;
@@ -41,7 +41,22 @@ pub fn harness() -> Harness {
 /// Both of them fail before anything reaches the window, so this is where they
 /// are said: a log line naming the cause beats a symptom the user has to guess.
 pub fn diagnostics() -> Vec<String> {
-    [unwritable_home(), proxy()].into_iter().flatten().collect()
+    let mut lines: Vec<String> = Vec::new();
+
+    if let Some(line) = unwritable_home() {
+        lines.push(line);
+
+        if let Some(marks) = spawned_by_dsh() {
+            lines.push(format!(
+                "这个 odiva 是从 dsh 里起的（{marks}），带着 dsh 只读的沙箱令牌，它派出的 dsh 也一样：\
+                 换成 dsh 之外的终端（alacritty / 资源管理器）启动"
+            ));
+        }
+    }
+
+    lines.extend(proxy());
+
+    lines
 }
 
 /// A startup warning when dsh's own home would stop it from booting.
@@ -55,10 +70,7 @@ fn unwritable_home() -> Option<String> {
         return None;
     }
 
-    let home = env::var_os("ODIVA_DSH_HOME")
-        .or_else(|| env::var_os("DSH_HOME"))
-        .map(PathBuf::from)
-        .or_else(|| env::var_os("USERPROFILE").map(|home| PathBuf::from(home).join(".dsh")))?;
+    let (home, source) = dsh_home()?;
 
     let target = if home.is_dir() {
         home.clone()
@@ -66,19 +78,61 @@ fn unwritable_home() -> Option<String> {
         home.parent()?.to_path_buf()
     };
 
-    let probe = target.join(".odiva-write-probe");
+    let error = probe(&target).err()?;
 
-    match std::fs::write(&probe, b"") {
-        Ok(()) => {
-            let _ = std::fs::remove_file(&probe);
-            None
-        }
-        Err(error) => Some(format!(
-            "DSH_HOME {} 不可写（{error}）：dsh 每次启动都要写 profiles/<name>/cordis.yml，会在握手前退出。\
-             从沙箱外的终端启动 odiva（在 DSH 沙箱里 ~/.dsh 是只读的），或把 ODIVA_DSH_HOME 指到一个可写目录",
-            home.display()
-        )),
+    let mut line = format!(
+        "DSH_HOME {} 不可写（{error}，来自 {source}）：dsh 每次启动都要写 profiles/<name>/cordis.yml，\
+         会在握手前退出。把 ODIVA_DSH_HOME 指到一个可写目录",
+        home.display()
+    );
+
+    if let Some(parent) = home.parent()
+        && probe(parent).is_err()
+    {
+        line.push_str(&format!(
+            "；连 {} 也写不了，所以不是 .dsh 的 ACL，是这个进程本身受限",
+            parent.display()
+        ));
     }
+
+    Some(line)
+}
+
+/// Where dsh keeps its home, and which variable said so.
+fn dsh_home() -> Option<(PathBuf, &'static str)> {
+    if let Some(path) = env::var_os("ODIVA_DSH_HOME") {
+        return Some((PathBuf::from(path), "ODIVA_DSH_HOME"));
+    }
+
+    if let Some(path) = env::var_os("DSH_HOME") {
+        return Some((PathBuf::from(path), "DSH_HOME"));
+    }
+
+    std::env::var_os("USERPROFILE").map(|profile| (PathBuf::from(profile).join(".dsh"), "默认"))
+}
+
+/// Whether a directory takes a new file. The probe is removed again.
+fn probe(directory: &Path) -> std::io::Result<()> {
+    let file = directory.join(".odiva-write-probe");
+
+    std::fs::write(&file, b"")?;
+    let _ = std::fs::remove_file(&file);
+
+    Ok(())
+}
+
+/// Which dsh variables are in the environment, when any are.
+///
+/// dsh exports these to every shell it starts, and the confinement travels with
+/// them: a window opened from such a shell, or from a terminal that shell
+/// started, cannot write `~/.dsh` either.
+fn spawned_by_dsh() -> Option<String> {
+    let marks: Vec<String> = ["DSH_SHELL", "DSH_PROFILE", "DSH_SESSION_ID"]
+        .into_iter()
+        .filter_map(|name| env::var(name).ok().map(|value| format!("{name}={value}")))
+        .collect();
+
+    (!marks.is_empty()).then(|| marks.join("，"))
 }
 
 /// The proxy every model request goes through, and whether anything answers it.
