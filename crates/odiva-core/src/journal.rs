@@ -31,14 +31,20 @@ impl Journal {
             return;
         }
 
+        // One buffer, one append: two threads writing a stamp each can otherwise
+        // interleave inside one line, and a line that reads as two is a log that
+        // lies about the order.
+        let line = format!(
+            "{} {}\n",
+            chrono::Local::now().format("%Y-%m-%d %H:%M:%S"),
+            message.as_ref()
+        );
+
         let written = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open(&self.path)
-            .and_then(|mut file| {
-                let stamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
-                writeln!(file, "{stamp} {}", message.as_ref())
-            });
+            .and_then(|mut file| file.write_all(line.as_bytes()));
 
         if let Err(error) = written {
             eprintln!("odiva: 写不了日志 {}：{error}", self.path.display());
