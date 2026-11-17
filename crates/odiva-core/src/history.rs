@@ -133,6 +133,17 @@ fn spoken(message: &AgentMessage) -> Option<(&'static str, String)> {
     }
 }
 
+/// A stretch of a line as plain text, for a summariser that will drop it.
+pub fn transcript(messages: &[AgentMessage]) -> String {
+    let mut text = String::new();
+
+    for (side, said) in messages.iter().filter_map(spoken) {
+        text.push_str(&format!("{side}：{said}\n"));
+    }
+
+    text
+}
+
 fn plain(content: &[Content]) -> String {
     content
         .iter()

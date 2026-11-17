@@ -12,7 +12,7 @@
 | **P2** | `line/` + `transcript`：线改用 `yoagent::Session`，工具调用进历史；窗口记录单独一份 | 旧 engine 改跑在 normal-idle 上，现有 engine 测试全绿 |
 | **P3** | `Odiva` / `Ledger` / wire pump 三个新模块；删 `engine` `talk` `tasks` `parked` `waiting` | 599 行 engine 测试逐条迁移后通过 |
 | **P4** | 状态机、两条 normal 线 + 任务线、四个 roster、`Intent`、超时与饥饿、提问组件、提权策略（已完成：提问组件、`request_idle` 的暂停转换、提权四档（"问用户"那一档走同一张提问卡，答复直接回给 Run）、四个 roster、`accept_task`（自写交接 + `state.json`）、任务线与开关线、switch 超时与饥饿上限） | 转换载荷、超时回 normal、饥饿强制回、兴趣任务提权被拒、暂停三选项全路径 |
-| **P5** | 压缩、`view_history`、预算与 say 限流接上（**进行中**：`view_history` 已完成，跨 generation、只读自己的线；压缩仍是确定性的残渣；预算与限流未接） | 压缩后 `HistoryDiverged` 不出现；预算只扣 idle 自触发 |
+| **P5** | 压缩、`view_history`、预算与 say 限流接上（**进行中**：`view_history` 与模型摘要压缩已完成——摘要模型可注入，失败退回确定性残渣；预算与 `say` 限流、idle 自唤醒未接） | 压缩后 `HistoryDiverged` 不出现；预算只扣 idle 自触发 |
 | **P6** | `drive` 示例、README、注释清洗 | 人能跑的东西还在，注释占比 < 5% |
 
 每个阶段都可编译、可跑、可提交；一个阶段 1–3 个 conventional commit。

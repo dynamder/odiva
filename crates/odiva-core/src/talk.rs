@@ -192,8 +192,13 @@ impl Talk {
 
     /// Rotates the line when it has outgrown itself. The old file stays where
     /// it is; the new one starts with a residue and the last few exchanges.
-    pub fn compact(&mut self, keep: usize) -> Result<()> {
-        self.line.compact(keep)
+    pub fn compact(&mut self, keep: usize, summary: Option<String>) -> Result<()> {
+        self.line.compact(keep, summary)
+    }
+
+    /// What a compaction would drop, so it can be summarised first.
+    pub fn dropped(&self, keep: usize) -> Vec<AgentMessage> {
+        self.line.dropped(keep)
     }
 }
 

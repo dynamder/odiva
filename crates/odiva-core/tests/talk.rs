@@ -275,7 +275,7 @@ async fn a_line_that_outgrew_itself_rotates_and_keeps_the_tail() {
         line.push_note(format!("第 {index} 条")).expect("a note");
     }
 
-    line.compact(6).expect("a rotation");
+    line.compact(6, None).expect("a rotation");
 
     let rotated = text(&store, idle(), 1);
     assert_eq!(rotated.len(), 7, "a residue and six messages");

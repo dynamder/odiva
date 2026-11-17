@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use odiva_core::line::{LineId, Mode};
 use odiva_core::task::{Ledger, Status, Task};
-use odiva_core::{Handle, Harness, Route, Scripted, Store, Transcript, start};
+use odiva_core::{Handle, Harness, Route, Scripted, Store, Transcript, start, start_with};
 use odiva_proto::{Answer, CoreHandle, CoreMessage, Presence, Side, UiMessage};
 use serde_json::json;
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -920,4 +920,58 @@ async fn a_switch_timeout_comes_back_to_normal() {
     }
 
     assert!(timed_out, "a silent task hands the turn back");
+}
+
+#[tokio::test]
+async fn a_line_that_fills_the_window_is_summarised_before_it_rotates() {
+    let store = scratch("engine-summary");
+    let usage = Usage {
+        input: 90_000,
+        output: 1_000,
+        ..Usage::default()
+    };
+
+    let mut turns: Vec<Vec<MockResponse>> = Vec::new();
+
+    for index in 0..7 {
+        turns.push(vec![saying(&format!("第 {index} 句")), done()]);
+    }
+
+    turns.push(vec![MockResponse::TextWithUsage("好。".to_owned(), usage)]);
+
+    let main = Arc::new(Scripted::new(turns));
+    let summariser = Arc::new(Scripted::new(vec![vec![MockResponse::Text(
+        "这是摘要".to_owned(),
+    )]]));
+
+    let (handle, mut inbox) = start_with(
+        store.clone(),
+        main,
+        PROMPT,
+        harness("chat"),
+        Some(summariser),
+    );
+
+    for index in 0..8 {
+        handle.send(UiMessage::UserSubmittedText {
+            text: format!("第 {index} 句"),
+        });
+
+        drain_until(&mut inbox, |message| {
+            matches!(
+                message,
+                CoreMessage::PresenceChanged {
+                    presence: Presence::Online
+                }
+            )
+        })
+        .await;
+    }
+
+    let rotated = line(&store, idle(), 1);
+
+    assert!(
+        rotated.iter().any(|text| text.contains("这是摘要")),
+        "the dropped stretch is replaced by the summariser's words: {rotated:?}"
+    );
 }

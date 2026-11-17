@@ -38,7 +38,7 @@ pub use handoff::Handoff;
 pub use ids::Ids;
 pub use journal::Journal;
 pub use line::{Line, LineId, Mode};
-pub use odiva::{Handle, start};
+pub use odiva::{Handle, start, start_with};
 pub use odiva_harness::{Harness, Stop, Turn, Worker, acp, harness};
 pub use roster::Roster;
 pub use route::{Model, Route, Scripted};

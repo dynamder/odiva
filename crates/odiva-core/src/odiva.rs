@@ -11,6 +11,7 @@ use odiva_proto::{
     CoreHandle, CoreMessage, Presence, Resolution, Snapshot, UiMessage, WireMessage,
 };
 use tokio::sync::{mpsc, oneshot};
+use yoagent::types::{AgentMessage, Content, Message as Llm};
 
 use crate::brief;
 use crate::error::{Error, Result};
@@ -46,6 +47,12 @@ const KEEP: usize = 6;
 
 /// How long she may stay inside task lines before being sent back to normal.
 const STARVE: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+
+/// What the cheap model is told when a line is compacted.
+const SUMMARY: &str = "\
+You are compacting one conversation so it can keep going with less room. Write a dense summary
+of the exchange below: decisions made, facts learned, promises given, questions still open.
+No preamble, no headings, no \"the user asked\". Just the content, in the language it was said.";
 
 /// What a run reported, and what it needs answered.
 pub enum Event {
@@ -122,6 +129,9 @@ pub struct WithdrawAsk;
 pub struct Setup {
     pub store: Store,
     pub route: Arc<dyn Route>,
+    /// The cheap model that summarises what compaction drops. Without one, a
+    /// deterministic residue stands in.
+    pub summariser: Option<Arc<dyn Route>>,
     pub prompt: String,
     pub out: mpsc::UnboundedSender<CoreMessage>,
     pub records: ActorRef<Records>,
@@ -137,6 +147,7 @@ pub struct Odiva {
     store: Store,
     ids: Ids,
     route: Arc<dyn Route>,
+    summariser: Option<Arc<dyn Route>>,
     prompt: String,
     out: mpsc::UnboundedSender<CoreMessage>,
     records: ActorRef<Records>,
@@ -169,6 +180,7 @@ impl Actor for Odiva {
             store: args.store,
             ids: Ids::default(),
             route: args.route,
+            summariser: args.summariser,
             prompt: args.prompt,
             out: args.out,
             records: args.records,
@@ -645,10 +657,58 @@ impl Odiva {
         }
 
         if talk.used() * 100 >= CONTEXT_WINDOW * COMPACT_AT {
-            talk.compact(KEEP)?;
+            let dropped = talk.dropped(KEEP);
+            let summary = self.summarise(&dropped).await;
+            talk.compact(KEEP, summary)?;
         }
 
         Ok(())
+    }
+
+    /// A dense summary of what is about to be dropped. Failure is not fatal:
+    /// a deterministic residue stands in.
+    async fn summarise(&self, dropped: &[AgentMessage]) -> Option<String> {
+        let route = self.summariser.as_ref()?;
+
+        if dropped.is_empty() {
+            return None;
+        }
+
+        let mut agent = route
+            .agent()
+            .with_system_prompt(SUMMARY)
+            .without_context_management();
+
+        let request = crate::history::transcript(dropped);
+        let (events, mut stream) = mpsc::unbounded_channel();
+        let drained = tokio::spawn(async move { while stream.recv().await.is_some() {} });
+
+        let ran = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            agent.prompt_with_sender(&request, events),
+        )
+        .await;
+
+        drained.await.ok();
+        ran.ok()?;
+
+        let said = agent.messages().iter().rev().find_map(|message| {
+            let AgentMessage::Llm(Llm::Assistant { content, .. }) = message else {
+                return None;
+            };
+
+            let text: String = content
+                .iter()
+                .filter_map(|block| match block {
+                    Content::Text { text } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect();
+
+            (!text.trim().is_empty()).then_some(text)
+        })?;
+
+        Some(said.chars().take(4000).collect())
     }
 
     /// A user task was accepted: the mode is no longer a guess.
@@ -896,6 +956,17 @@ pub fn start(
     prompt: impl Into<String>,
     harness: Harness,
 ) -> (Handle, mpsc::UnboundedReceiver<CoreMessage>) {
+    start_with(store, route, prompt, harness, None)
+}
+
+/// Starts the core with a cheap model for compaction summaries.
+pub fn start_with(
+    store: Store,
+    route: Arc<dyn Route>,
+    prompt: impl Into<String>,
+    harness: Harness,
+    summariser: Option<Arc<dyn Route>>,
+) -> (Handle, mpsc::UnboundedReceiver<CoreMessage>) {
     use kameo::actor::Spawn;
 
     let (out, messages) = mpsc::unbounded_channel();
@@ -932,6 +1003,7 @@ pub fn start(
     let odiva = Odiva::spawn(Setup {
         store: store.clone(),
         route,
+        summariser,
         prompt: prompt.into(),
         out,
         records,

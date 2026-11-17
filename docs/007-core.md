@@ -233,7 +233,8 @@ memory/  odiva.log
 
 - 线直接用 `yoagent::Session`：entry 自带 `id`、`parent`、`AgentMessage`，工具调用与结果都在里面。
 - 轮边界写盘：`session.append_new(agent.messages())`。压缩在循环外做，所以 `HistoryDiverged` 应当永不出现。
-- 压缩：用量到窗口 60% 时轮转 generation（旧文件留着），新代以摘要 + 最近若干轮起根。
+- 压缩：用量到窗口 60% 时轮转 generation（旧文件留着）。被丢掉的那一段先交给便宜的模型写成摘要
+  （拿不到摘要就退化成确定性的残渣），新代以摘要 + 最近若干轮起根。
 - `view_history` 只查自己这条线，跨 generation，按 entry id / 区间 / 过滤条件精确返回。
 - 预算只扣 idle；对话与任务不设预算。
 - `say` 限流只在 idle（3 条 / 10 分钟）。

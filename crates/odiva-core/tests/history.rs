@@ -43,7 +43,7 @@ fn a_compaction_does_not_lose_the_old_words() {
     let id = seed(&store);
 
     let mut line = Line::open(&store, id.clone(), "你是 odiva。").expect("a line");
-    line.compact(3).expect("a rotation");
+    line.compact(3, None).expect("a rotation");
     line.push_note("压缩之后").expect("a note");
 
     let entries = history::entries(&store, &id).expect("a line");

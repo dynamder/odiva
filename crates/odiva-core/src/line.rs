@@ -123,13 +123,20 @@ impl Line {
 
     /// Rotates to the next generation: a residue, then the last `keep`
     /// messages. The old file stays where it is.
-    pub fn compact(&mut self, keep: usize) -> Result<()> {
+    /// Rotates to the next generation: a summary, then the last `keep`
+    /// messages. The old file stays where it is. Without a summary, a
+    /// deterministic residue stands in for one.
+    pub fn compact(&mut self, keep: usize, summary: Option<String>) -> Result<()> {
         let messages = self.session.path_messages();
         let tail = messages.len().saturating_sub(keep).max(1);
 
+        let summary = summary.unwrap_or_else(|| residue(&messages[1..tail]));
+
         let mut session = Session::new();
         session.append(root(&self.system));
-        session.append(AgentMessage::Llm(Message::user(residue(&messages[1..tail]))));
+        session.append(AgentMessage::Llm(Message::user(format!(
+            "【压缩】\n{summary}"
+        ))));
 
         for message in &messages[tail..] {
             session.append(message.clone());
@@ -142,6 +149,14 @@ impl Line {
         self.session = session;
 
         Ok(())
+    }
+
+    /// What a compaction would drop.
+    pub fn dropped(&self, keep: usize) -> Vec<AgentMessage> {
+        let messages = self.session.path_messages();
+        let tail = messages.len().saturating_sub(keep).max(1);
+
+        messages[1..tail].to_vec()
     }
 
     fn persist_new(&mut self) -> Result<()> {
