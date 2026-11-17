@@ -76,6 +76,11 @@ worker 自己的环境：`ODIVA_TASK_DIR`、`ODIVA_TASK_ID`，以及 harness 侧
 `cargo run -p odiva-core --example doctor` 只做握手 + `session/new`，不花一个 token，就能确认
 程序解析、`.cmd` 启动器、协议、目录都对。
 
+能跑起来却拿不到答案的两种情形，odiva 在启动时就把原因写进日志（`configure::diagnostics`）：
+`DSH_HOME` 不可写（dsh 每次启动都写 `cordis.yml`，会在握手前退出），以及 `HTTPS_PROXY` /
+`HTTP_PROXY` / `ALL_PROXY` 指着一个没人应答的端口——brain 走 `reqwest`，它自己读这些变量，
+于是请求打到一个本地死端口，报出来是"tcp connect error 127.0.0.1:7900"，看着像断网。
+
 ## 暂停与恢复
 
 暂停（busy→idle）在进程侧的顺序：

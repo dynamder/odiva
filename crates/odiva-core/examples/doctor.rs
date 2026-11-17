@@ -24,8 +24,8 @@ async fn main() {
 
     println!("harness: {harness:?}");
 
-    if let Some(warning) = configure::warning() {
-        println!("注意：{warning}");
+    for line in configure::diagnostics() {
+        println!("注意：{line}");
     }
     println!("工作目录: {}", cwd.display());
 

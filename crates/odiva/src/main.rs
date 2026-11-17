@@ -16,9 +16,9 @@ fn main() -> iced::Result {
     let journal = Journal::new(root.join("odiva.log"));
     let harness = odiva_core::configure::harness();
 
-    if let Some(warning) = odiva_core::configure::warning() {
-        println!("odiva: {warning}");
-        journal.line(&format!("启动：{warning}"));
+    for line in odiva_core::configure::diagnostics() {
+        println!("odiva: {line}");
+        journal.line(format!("启动：{line}"));
     }
 
     listen(journal.clone());
