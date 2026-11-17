@@ -22,7 +22,7 @@ use iced::widget::operation;
 use iced::{Element, Size, Subscription, Task as Command, Theme};
 use tokio::sync::mpsc::UnboundedReceiver;
 
-use odiva_proto::{CoreHandle, CoreMessage, Presence, Snapshot, UiMessage};
+use odiva_proto::{Answer, CoreHandle, CoreMessage, Presence, Question, Snapshot, UiMessage};
 
 use crate::style::{column_width, same_side_gap, side_gap};
 use crate::wire::Wire;
@@ -44,6 +44,14 @@ pub enum Message {
     UserRequestedStop,
     /// The person tapped one of the offered replies.
     UserTappedReply(String),
+    /// The person picked an option that answers on the spot.
+    QuestionChose(usize),
+    /// The person picked an option that wants a line of explanation.
+    QuestionOpened(usize),
+    /// The person typed that line.
+    QuestionTyped(String),
+    /// The person sent the answer.
+    QuestionAnswered,
     /// The person asked to go back to the newest message.
     UserJumpedToNewest,
     /// The person tapped a link in a message.
@@ -69,6 +77,10 @@ impl Message {
             Self::UserSubmittedDraft => "submit",
             Self::UserRequestedStop => "stop",
             Self::UserTappedReply(_) => "tapped",
+            Self::QuestionChose(_) => "chose",
+            Self::QuestionOpened(_) => "opened",
+            Self::QuestionTyped(_) => "typed",
+            Self::QuestionAnswered => "answered",
             Self::UserJumpedToNewest => "jumped",
             Self::UserOpenedLink(_) => "link",
             Self::CoreReported(_) => "core",
@@ -96,6 +108,12 @@ pub struct App {
     wire: Wire,
     /// The last failure, shown until the next attempt.
     notice: Option<String>,
+    /// A decision nobody can type: while this is set, the composer is off.
+    question: Option<Question>,
+    /// Which option of that question is asking for its one line.
+    opening: Option<usize>,
+    /// What the person has typed into it so far.
+    answer: String,
 }
 
 impl App {
@@ -119,6 +137,9 @@ impl App {
             pinned: true,
             wire: Wire::default(),
             notice: None,
+            question: None,
+            opening: None,
+            answer: String::new(),
         };
 
         for slot in 0..app.messages.len() {
@@ -199,6 +220,16 @@ impl App {
                 self.estimate(slot);
             }
             CoreMessage::PresenceChanged { presence } => self.presence = presence,
+            CoreMessage::QuestionAsked { question } => {
+                self.question = Some(question);
+                self.opening = None;
+                self.answer.clear();
+            }
+            CoreMessage::QuestionClosed { .. } => {
+                self.question = None;
+                self.opening = None;
+                self.answer.clear();
+            }
             CoreMessage::CoreFailed { note } => self.notice = Some(note),
         }
 
@@ -246,6 +277,23 @@ impl App {
                 }
             }
             Message::UserRequestedStop => self.wire.send(UiMessage::UserRequestedStop),
+            Message::QuestionChose(option) => {
+                self.wire
+                    .send(UiMessage::AnswerQuestion(Answer { option, note: None }));
+                self.question = None;
+                self.opening = None;
+            }
+            Message::QuestionOpened(option) => self.opening = Some(option),
+            Message::QuestionTyped(text) => self.answer = text,
+            Message::QuestionAnswered => {
+                if let Some(option) = self.opening {
+                    let note = (!self.answer.trim().is_empty()).then(|| std::mem::take(&mut self.answer));
+
+                    self.wire.send(UiMessage::AnswerQuestion(Answer { option, note }));
+                    self.question = None;
+                    self.opening = None;
+                }
+            }
             Message::UserTappedReply(text) => {
                 self.wire.send(UiMessage::UserSubmittedText { text });
                 self.notice = None;
@@ -308,6 +356,21 @@ impl App {
 
     pub fn draft(&self) -> &str {
         &self.draft
+    }
+
+    /// The decision the window is waiting on, if any.
+    pub fn question(&self) -> Option<&Question> {
+        self.question.as_ref()
+    }
+
+    /// Which option of it is asking for a line.
+    pub fn opening(&self) -> Option<usize> {
+        self.opening
+    }
+
+    /// What the person typed into that line.
+    pub fn answer(&self) -> &str {
+        &self.answer
     }
 
     pub fn presence(&self) -> Presence {

@@ -34,17 +34,92 @@ use crate::{App, Message, SHEET, time};
 
 /// The whole window.
 pub fn window(app: &App) -> Element<'_, Message> {
-    let shell = column![
-        header(app),
-        rule::horizontal(1).styled(Line::Hairline),
-        transcript(app),
-        rule::horizontal(1).styled(Line::Hairline),
-        composer(app),
-    ]
-    .width(Length::Fill)
-    .height(Length::Fill);
+    let mut shell = Column::new()
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .push(header(app))
+        .push(rule::horizontal(1).styled(Line::Hairline))
+        .push(transcript(app));
+
+    if app.question().is_some() {
+        shell = shell
+            .push(rule::horizontal(1).styled(Line::Hairline))
+            .push(question(app));
+    }
+
+    shell = shell
+        .push(rule::horizontal(1).styled(Line::Hairline))
+        .push(composer(app));
 
     container(shell).styled(Surface::Shell).into()
+}
+
+/// A decision, above the composer it turns off.
+///
+/// Not a modal: the transcript stays scrollable and the input method is never
+/// taken away. What it takes away is the ability to type something else while a
+/// state transition is waiting for an answer.
+fn question(app: &App) -> Element<'_, Message> {
+    let Some(question) = app.question() else {
+        return space::vertical().height(0).into();
+    };
+
+    let mut card = Column::new().spacing(7).width(Length::Fill);
+
+    card = card.push(
+        text(question.question.clone())
+            .styled(Type::Body)
+            .width(Length::Fill),
+    );
+
+    for (index, option) in question.options.iter().enumerate() {
+        if app.opening() == Some(index) {
+            let wants = option.note.as_ref();
+
+            let field = text_input(
+                wants.map(|note| note.prompt.as_str()).unwrap_or("说明"),
+                app.answer(),
+            )
+            .on_input(Message::QuestionTyped)
+            .on_submit(Message::QuestionAnswered)
+            .padding(Padding::new(8.0).horizontal(12.0))
+            .size(14.0)
+            .width(Length::Fill)
+            .style(input_style);
+
+            let ready = wants.is_some_and(|note| !note.required) || !app.answer().trim().is_empty();
+
+            let mut confirm = button(text("回复").styled(Type::Body))
+                .padding([7.0, 16.0])
+                .styled(Act::Primary);
+
+            if ready {
+                confirm = confirm.on_press(Message::QuestionAnswered);
+            }
+
+            card = card.push(row![field, confirm].spacing(8).align_y(Alignment::Center));
+            continue;
+        }
+
+        let wants_note = option.note.is_some();
+
+        let pick = button(text(option.label.clone()).styled(Type::Body))
+            .width(Length::Fill)
+            .padding([7.0, 12.0])
+            .styled(if wants_note { Act::Quiet } else { Act::Primary })
+            .on_press(if wants_note {
+                Message::QuestionOpened(index)
+            } else {
+                Message::QuestionChose(index)
+            });
+
+        card = card.push(pick);
+    }
+
+    container(in_column(card.into()))
+        .padding(Padding::new(10.0).vertical(9.0))
+        .styled(Surface::Footer)
+        .into()
 }
 
 /// Puts a band's contents into the one column the window is built on.
@@ -323,15 +398,29 @@ fn file_view(file: &FileRef) -> Element<'_, Message> {
 /// a failure sits above the input until the next attempt, because a window that
 /// swallowed an error would be lying about the conversation.
 fn composer(app: &App) -> Element<'_, Message> {
-    let input = text_input("发消息…", app.draft())
-        .on_input(Message::UserChangedDraft)
-        .on_submit(Message::UserSubmittedDraft)
-        .padding(Padding::new(9.0).horizontal(13.0))
-        .size(14.0)
-        .width(Length::Fill)
-        .style(input_style);
+    let asking = app.question().is_some();
 
-    let action = if app.is_working() {
+    let input = if asking {
+        text_input("先回答上面的问题", "")
+            .padding(Padding::new(9.0).horizontal(13.0))
+            .size(14.0)
+            .width(Length::Fill)
+            .style(input_style_disabled)
+    } else {
+        text_input("发消息…", app.draft())
+            .on_input(Message::UserChangedDraft)
+            .on_submit(Message::UserSubmittedDraft)
+            .padding(Padding::new(9.0).horizontal(13.0))
+            .size(14.0)
+            .width(Length::Fill)
+            .style(input_style)
+    };
+
+    let action = if asking {
+        button(text("发送").styled(Type::Muted))
+            .padding([9.0, 18.0])
+            .styled(Act::Quiet)
+    } else if app.is_working() {
         button(text("停止").styled(Type::Body))
             .on_press(Message::UserRequestedStop)
             .padding([9.0, 18.0])
@@ -362,6 +451,24 @@ fn bold() -> Font {
     Font {
         weight: Weight::Bold,
         ..Font::DEFAULT
+    }
+}
+
+/// The composer while a question is waiting: the same shape, no invitation.
+fn input_style_disabled(theme: &Theme, _status: text_input::Status) -> text_input::Style {
+    let tokens = Tokens::from_theme(theme);
+
+    text_input::Style {
+        background: Background::Color(tokens.surface),
+        border: Border {
+            color: tokens.border,
+            width: 1.0,
+            radius: 10.0.into(),
+        },
+        icon: tokens.text_muted,
+        placeholder: tokens.text_muted,
+        value: tokens.text_muted,
+        selection: tokens.accent,
     }
 }
 

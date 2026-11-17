@@ -79,6 +79,17 @@ fn show(message: &CoreMessage) -> String {
             format!("{who}：{}", message.markdown)
         }
         CoreMessage::PresenceChanged { presence } => format!("— {presence:?} —"),
+        CoreMessage::QuestionAsked { question } => {
+            let options: Vec<String> = question
+                .options
+                .iter()
+                .enumerate()
+                .map(|(index, option)| format!("{index}. {}", option.label))
+                .collect();
+
+            format!("？{}\n  {}", question.question, options.join("  "))
+        }
+        CoreMessage::QuestionClosed { resolution } => format!("— 提问结束：{resolution:?} —"),
         CoreMessage::CoreFailed { note } => format!("错误：{note}"),
     }
 }

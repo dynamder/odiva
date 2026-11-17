@@ -11,7 +11,7 @@
 | **P1** | 拆出 `odiva-harness`：ACP 客户端、结构化 `Ask`、假 harness（`session/load` 与多轮会话留到 P3 的 `Run`） | `cargo test --workspace` 全绿，零行为变化 |
 | **P2** | `line/` + `transcript`：线改用 `yoagent::Session`，工具调用进历史；窗口记录单独一份 | 旧 engine 改跑在 normal-idle 上，现有 engine 测试全绿 |
 | **P3** | `Odiva` / `Ledger` / wire pump 三个新模块；删 `engine` `talk` `tasks` `parked` `waiting` | 599 行 engine 测试逐条迁移后通过 |
-| **P4** | 状态机、两条 normal 线 + 任务线、四个 roster、`Intent`、超时与饥饿、提问组件、提权策略 | 转换载荷、超时回 normal、饥饿强制回、兴趣任务提权被拒、暂停三选项全路径 |
+| **P4** | 状态机、两条 normal 线 + 任务线、四个 roster、`Intent`、超时与饥饿、提问组件、提权策略（**进行中**：提问组件与 `request_idle` 的暂停转换已完成；`accept_task`、四 roster、开关线、超时与提权策略未做） | 转换载荷、超时回 normal、饥饿强制回、兴趣任务提权被拒、暂停三选项全路径 |
 | **P5** | 压缩、`view_history`、预算与 say 限流接上 | 压缩后 `HistoryDiverged` 不出现；预算只扣 idle 自触发 |
 | **P6** | `drive` 示例、README、注释清洗 | 人能跑的东西还在，注释占比 < 5% |
 
@@ -38,6 +38,7 @@ P4 之前就能验证最关键的假设：**状态是她的决定、线是记录
 | `crates/odiva-core` | **P3 完成**：`Odiva` 与 `Records` 两个 actor 取代 engine 与 tasks；`line/` 用 `yoagent::Session` 存上下文，`transcript.jsonl` 单独记窗口的东西 |
 | `crates/ericed` | vendor 自 `../sofaia`，编译通过，示例自带断言 |
 | 文档 | P0 完成：007 是新设计的唯一出处 |
+| 提问 | P4 已落地：proto 的 `QuestionAsked` / `QuestionClosed` / `AnswerQuestion`，窗口的提问卡与禁用输入，core 的阻塞式 `request_idle` 与暂停清理（截图 `target/ui-chat-question.png`） |
 
 P4 之前的差异只剩状态机部分：忙碌仍由台账推导（没有 `accept_task` / `request_idle` 的转换），
 工具表还是两个而不是四个，提权还没有策略。P4 一次补齐。

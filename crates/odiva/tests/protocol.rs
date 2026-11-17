@@ -351,3 +351,97 @@ fn a_row_estimate_includes_the_space_above_it() {
         row + odiva::style::same_side_gap()
     );
 }
+
+#[test]
+fn a_question_takes_the_composer_and_the_answer_leaves_through_the_wire() {
+    use odiva_proto::{Note, Question, QuestionOption};
+
+    let (mut app, handle) = connected_window();
+
+    let question = Question {
+        question: "要暂停吗？".to_owned(),
+        options: vec![
+            QuestionOption {
+                label: "同意".to_owned(),
+                note: None,
+            },
+            QuestionOption {
+                label: "要求解释".to_owned(),
+                note: Some(Note {
+                    prompt: "你想先知道什么？".to_owned(),
+                    required: true,
+                }),
+            },
+        ],
+    };
+
+    let _ = app.apply(CoreMessage::QuestionAsked {
+        question: question.clone(),
+    });
+
+    assert_eq!(app.question(), Some(&question), "the window is waiting");
+
+    let _ = app.update(Message::QuestionChose(0));
+
+    assert_eq!(app.question(), None, "answering puts the composer back");
+    assert_eq!(
+        handle.taken(),
+        vec![UiMessage::AnswerQuestion(odiva_proto::Answer {
+            option: 0,
+            note: None,
+        })]
+    );
+}
+
+#[test]
+fn an_option_that_wants_a_line_opens_before_it_answers() {
+    use odiva_proto::{Note, Question, QuestionOption};
+
+    let (mut app, handle) = connected_window();
+
+    let _ = app.apply(CoreMessage::QuestionAsked {
+        question: Question {
+            question: "要暂停吗？".to_owned(),
+            options: vec![QuestionOption {
+                label: "要求解释".to_owned(),
+                note: Some(Note {
+                    prompt: "你想先知道什么？".to_owned(),
+                    required: true,
+                }),
+            }],
+        },
+    });
+
+    let _ = app.update(Message::QuestionOpened(0));
+    assert_eq!(app.opening(), Some(0), "the line is open, nothing sent yet");
+    assert!(handle.taken().is_empty(), "opening is not answering");
+
+    let _ = app.update(Message::QuestionTyped("为什么？".to_owned()));
+    let _ = app.update(Message::QuestionAnswered);
+
+    assert_eq!(
+        handle.taken(),
+        vec![UiMessage::AnswerQuestion(odiva_proto::Answer {
+            option: 0,
+            note: Some("为什么？".to_owned()),
+        })]
+    );
+}
+
+#[test]
+fn a_withdrawn_question_puts_the_composer_back() {
+    let (mut app, _handle) = connected_window();
+
+    let _ = app.apply(CoreMessage::QuestionAsked {
+        question: odiva_proto::Question {
+            question: "要暂停吗？".to_owned(),
+            options: Vec::new(),
+        },
+    });
+
+    let _ = app.apply(CoreMessage::QuestionClosed {
+        resolution: odiva_proto::Resolution::Withdrawn,
+    });
+
+    assert_eq!(app.question(), None);
+}

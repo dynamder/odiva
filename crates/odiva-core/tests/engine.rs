@@ -9,7 +9,7 @@ use std::time::Duration;
 use odiva_core::line::{LineId, Mode};
 use odiva_core::task::{Ledger, Status, Task};
 use odiva_core::{Handle, Harness, Route, Scripted, Store, Transcript, start};
-use odiva_proto::{CoreHandle, CoreMessage, Presence, Side, UiMessage};
+use odiva_proto::{Answer, CoreHandle, CoreMessage, Presence, Side, UiMessage};
 use serde_json::json;
 use tokio::sync::mpsc::UnboundedReceiver;
 use yoagent::provider::mock::{MockResponse, MockToolCall};
@@ -64,6 +64,14 @@ fn dispatching(goal: &str) -> MockResponse {
     MockResponse::ToolCalls(vec![MockToolCall {
         name: "task_dispatch".to_owned(),
         arguments: json!({ "goal": goal }),
+        provider_metadata: None,
+    }])
+}
+
+fn idling(message: &str) -> MockResponse {
+    MockResponse::ToolCalls(vec![MockToolCall {
+        name: "request_idle".to_owned(),
+        arguments: json!({ "message": message }),
         provider_metadata: None,
     }])
 }
@@ -433,25 +441,11 @@ async fn a_task_in_flight_moves_the_conversation_to_the_busy_line() {
 }
 
 #[tokio::test]
-async fn asking_to_be_idle_moves_the_next_turn_off_the_busy_line() {
+async fn agreeing_to_pause_moves_the_next_turn_off_the_busy_line() {
     let store = scratch("engine-parked");
     let route = Arc::new(Scripted::new(vec![
-        vec![
-            MockResponse::ToolCalls(vec![MockToolCall {
-                name: "task_dispatch".to_owned(),
-                arguments: json!({ "goal": "改 README" }),
-                provider_metadata: None,
-            }]),
-            done(),
-        ],
-        vec![
-            MockResponse::ToolCalls(vec![MockToolCall {
-                name: "request_idle".to_owned(),
-                arguments: json!({}),
-                provider_metadata: None,
-            }]),
-            done(),
-        ],
+        vec![dispatching("改 README"), saying("派出去了。"), done()],
+        vec![idling("先停一下"), done()],
         vec![saying("在。"), done()],
     ]));
 
@@ -460,29 +454,85 @@ async fn asking_to_be_idle_moves_the_next_turn_off_the_busy_line() {
     handle.send(UiMessage::UserSubmittedText {
         text: "把 README 改一下".to_owned(),
     });
-    drain(&mut inbox, 3).await;
+
+    drain_until(&mut inbox, |message| {
+        matches!(message, CoreMessage::MessageAppended { message } if message.markdown == "派出去了。")
+    })
+    .await;
 
     handle.send(UiMessage::UserSubmittedText {
         text: "先停一下".to_owned(),
     });
-    drain(&mut inbox, 4).await;
+
+    let asked = drain_until(&mut inbox, |message| {
+        matches!(message, CoreMessage::QuestionAsked { .. })
+    })
+    .await;
+
+    assert!(asked, "a pause is requested as a question, not as a sentence");
+
+    handle.send(UiMessage::AnswerQuestion(Answer {
+        option: 0,
+        note: None,
+    }));
+
+    assert!(
+        paused(&store).await,
+        "agreeing stops the work and puts the tasks down"
+    );
 
     handle.send(UiMessage::UserSubmittedText {
         text: "那你说说现在在干嘛".to_owned(),
     });
-    drain(&mut inbox, 4).await;
 
-    let stopped = line(&store, busy(), 0);
-    assert!(
-        stopped.iter().any(|text| text.contains("先停一下")),
-        "the turn that parked ran on the busy line"
-    );
+    drain_until(&mut inbox, |message| {
+        matches!(message, CoreMessage::MessageAppended { message } if message.markdown == "在。")
+    })
+    .await;
 
     let idle = line(&store, idle(), 0);
     assert!(
         idle.iter().any(|text| text.contains("那你说说现在在干嘛")),
         "the turn after parking runs on the idle line"
     );
+}
+
+/// Waits until every unfinished task has been put down.
+async fn paused(store: &Store) -> bool {
+    for _ in 0..400 {
+        let ledger = Ledger::at(store.tasks()).expect("a ledger");
+
+        if ledger
+            .all()
+            .iter()
+            .any(|task| task.status == Status::Paused)
+        {
+            return true;
+        }
+
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+
+    false
+}
+
+/// Drains until the predicate matches something, or gives up.
+async fn drain_until(
+    inbox: &mut UnboundedReceiver<CoreMessage>,
+    wanted: impl Fn(&CoreMessage) -> bool,
+) -> bool {
+    for _ in 0..200 {
+        let Ok(Some(message)) = tokio::time::timeout(Duration::from_millis(50), inbox.recv()).await
+        else {
+            continue;
+        };
+
+        if wanted(&message) {
+            return true;
+        }
+    }
+
+    false
 }
 
 #[tokio::test]

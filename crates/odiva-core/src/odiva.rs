@@ -7,7 +7,9 @@ use kameo::Actor;
 use kameo::actor::ActorRef;
 use kameo::message::{Context, Message};
 use odiva_harness::{Decision, Turn};
-use odiva_proto::{CoreHandle, CoreMessage, Presence, Snapshot, UiMessage, WireMessage};
+use odiva_proto::{
+    CoreHandle, CoreMessage, Presence, Resolution, Snapshot, UiMessage, WireMessage,
+};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::brief;
@@ -17,8 +19,9 @@ use crate::harness::Harness;
 use crate::ids::Ids;
 use crate::journal::Journal;
 use crate::ledger::{self, Records};
-use crate::line::{LineId, Mode};
-use crate::parked::Parked;
+use crate::line::{Line, LineId, Mode};
+use crate::asking::Asking;
+use crate::halt::Halt;
 use crate::prompt::AFTER_SILENCE;
 use crate::roster::Roster;
 use crate::route::Route;
@@ -74,8 +77,8 @@ pub struct CancelTask {
     pub task: String,
 }
 
-/// She asked to be idle until something happens.
-pub struct AskIdle;
+/// The person agreed to stop work: this is the transition, not the request.
+pub struct Pause;
 
 pub struct Setup {
     pub store: Store,
@@ -87,6 +90,8 @@ pub struct Setup {
     pub journal: Journal,
     pub turn: TurnCancel,
     pub waiting: Waiting,
+    pub asking: Asking,
+    pub halt: Halt,
 }
 
 pub struct Odiva {
@@ -98,9 +103,11 @@ pub struct Odiva {
     records: ActorRef<Records>,
     harness: Harness,
     journal: Journal,
-    parked: Parked,
+    mode: Mode,
     waiting: Waiting,
     turn: TurnCancel,
+    asking: Asking,
+    halt: Halt,
     runs: HashMap<String, Run>,
     permits: HashMap<String, oneshot::Sender<Decision>>,
     next_run: u64,
@@ -120,9 +127,11 @@ impl Actor for Odiva {
             records: args.records,
             harness: args.harness,
             journal: args.journal,
-            parked: Parked::default(),
+            mode: Mode::Idle,
             waiting: args.waiting,
             turn: args.turn,
+            asking: args.asking,
+            halt: args.halt,
             runs: HashMap::new(),
             permits: HashMap::new(),
             next_run: 0,
@@ -183,6 +192,14 @@ impl Message<Permit> for Odiva {
     }
 }
 
+impl Message<Pause> for Odiva {
+    type Reply = ();
+
+    async fn handle(&mut self, _pause: Pause, _ctx: &mut Context<Self, Self::Reply>) {
+        self.pause().await;
+    }
+}
+
 impl Message<CancelTask> for Odiva {
     type Reply = ();
 
@@ -202,21 +219,12 @@ impl Message<CancelTask> for Odiva {
     }
 }
 
-impl Message<AskIdle> for Odiva {
-    type Reply = ();
-
-    async fn handle(&mut self, _ask: AskIdle, _ctx: &mut Context<Self, Self::Reply>) {
-        self.parked.park();
-    }
-}
-
 impl Message<Event> for Odiva {
     type Reply = ();
 
     async fn handle(&mut self, event: Event, ctx: &mut Context<Self, Self::Reply>) {
         match event {
             Event::Asked { task, ask, answer } => {
-                self.parked.wake();
                 self.journal
                     .line(format!("任务 {task}：等你批准 {}", ask.title));
 
@@ -299,7 +307,7 @@ impl Odiva {
         ctx: &mut Context<Self, ()>,
     ) -> Result<()> {
         let spoken = Spoken::default();
-        let busy = self.in_busy().await;
+        let busy = self.mode == Mode::Busy;
         let id = LineId::normal(if busy { Mode::Busy } else { Mode::Idle });
 
         let jobs: Vec<String> = self
@@ -313,15 +321,16 @@ impl Odiva {
 
         let seed = busy.then(|| Handoff::of(user, &jobs).render());
 
-        let mut talk = Talk::open(
-            &self.store,
+        let mut talk = Talk::open(crate::talk::Activation {
+            store: &self.store,
             id,
-            &*self.route,
-            &self.prompt,
-            self.roster(ctx, &spoken, busy),
-            spoken,
+            route: &*self.route,
+            prompt: &self.prompt,
+            roster: self.roster(ctx, &spoken, busy),
+            said: spoken,
             seed,
-        )?;
+            halt: self.halt.clone(),
+        })?;
 
         if let Some(user) = user {
             talk.note(user)?;
@@ -364,25 +373,73 @@ impl Odiva {
         Ok(())
     }
 
-    /// Busy is a fact, not a mode she chose: a task is unfinished and nobody has
-    /// asked for idle.
-    async fn in_busy(&mut self) -> bool {
-        if self.parked.is_parked() {
-            return false;
-        }
-
-        !self
+    /// Starts every queued task the slots allow, and follows the mode from it.
+    async fn refresh_mode(&mut self) {
+        let live = !self
             .records
             .ask(ledger::Unfinished)
             .await
             .unwrap_or_default()
-            .is_empty()
+            .is_empty();
+
+        self.mode = if live { Mode::Busy } else { Mode::Idle };
+    }
+
+    /// The pause the person agreed to: stop everything, and go back to idle.
+    async fn pause(&mut self) {
+        for (_, run) in self.runs.drain() {
+            run.cancel.cancel();
+        }
+
+        let unfinished = self
+            .records
+            .ask(ledger::Unfinished)
+            .await
+            .unwrap_or_default();
+
+        for mut task in unfinished {
+            task.status = Status::Paused;
+            self.update(task).await;
+        }
+
+        self.mode = Mode::Idle;
+        self.journal.line("暂停：回到空闲");
+
+        if let Err(error) = self.leave_busy().await {
+            self.journal.line(format!("离开忙线：{error}"));
+            self.emit(CoreMessage::CoreFailed {
+                note: format!("离开忙线：{error}"),
+            });
+        }
+    }
+
+    /// What the idle line is told when the work stops: the same facts a restart
+    /// would have to reconstruct.
+    async fn leave_busy(&self) -> Result<()> {
+        let all = self.records.ask(ledger::Everything).await.unwrap_or_default();
+
+        let mut note = String::from("【回到空闲】\n");
+
+        for task in all.iter().filter(|task| task.status == Status::Paused) {
+            note.push_str(&format!("- 暂停：{}\n", task.line()));
+        }
+
+        for task in all
+            .iter()
+            .filter(|task| matches!(task.status, Status::Done | Status::Cancelled))
+        {
+            note.push_str(&format!("- 收工：{}\n", task.line()));
+        }
+
+        let mut line = Line::open(&self.store, LineId::normal(Mode::Idle), &self.prompt)?;
+        line.push_note(note)
     }
 
     /// Starts queued tasks until every slot is busy.
     async fn fill(&mut self, ctx: &mut Context<Self, ()>) {
         loop {
             if self.runs.len() >= brief::SLOTS {
+                self.refresh_mode().await;
                 return;
             }
 
@@ -396,6 +453,7 @@ impl Odiva {
                 .into_iter()
                 .find(|task| task.status == Status::OnSlot)
             else {
+                self.refresh_mode().await;
                 return;
             };
 
@@ -438,6 +496,7 @@ impl Odiva {
         }
 
         self.update(task).await;
+        self.refresh_mode().await;
     }
 
     async fn lookup(&self, id: &str) -> Option<Task> {
@@ -470,7 +529,10 @@ impl Odiva {
         ));
 
         if busy {
-            tools.push(Box::new(crate::parked::RequestIdle::new(
+            tools.push(Box::new(crate::idle::RequestIdle::new(
+                self.out.clone(),
+                self.asking.clone(),
+                self.halt.clone(),
                 ctx.actor_ref().clone(),
             )));
         }
@@ -535,6 +597,9 @@ pub fn start(
 
     let turn = TurnCancel::default();
     let waiting = Waiting::default();
+    let asking = Asking::default();
+    let halt = Halt::default();
+    let pump_out = out.clone();
 
     let odiva = Odiva::spawn(Setup {
         store: store.clone(),
@@ -546,6 +611,8 @@ pub fn start(
         journal,
         turn: turn.clone(),
         waiting: waiting.clone(),
+        asking: asking.clone(),
+        halt,
     });
 
     let (wire, mut inbox) = mpsc::unbounded_channel();
@@ -557,7 +624,22 @@ pub fn start(
                     waiting.offer(text);
                     let _ = odiva.tell(Heard).await;
                 }
-                UiMessage::UserRequestedStop => turn.cancel(),
+                UiMessage::AnswerQuestion(answer) => {
+                    if asking.answer(answer) {
+                        let _ = pump_out.send(CoreMessage::QuestionClosed {
+                            resolution: Resolution::Answered,
+                        });
+                    }
+                }
+                UiMessage::UserRequestedStop => {
+                    if asking.withdraw() {
+                        let _ = pump_out.send(CoreMessage::QuestionClosed {
+                            resolution: Resolution::Withdrawn,
+                        });
+                    }
+
+                    turn.cancel();
+                }
             }
         }
     });

@@ -161,6 +161,39 @@ fn long() -> Vec<CoreMessage> {
     vec![attached(messages)]
 }
 
+/// The same conversation, with a pause waiting on an answer.
+fn asking() -> Vec<CoreMessage> {
+    let mut script = chat();
+
+    script.push(CoreMessage::QuestionAsked {
+        question: odiva_proto::Question {
+            question: "要暂停吗？六个任务里三个已经完成，另外三个还在跑。".to_owned(),
+            options: vec![
+                odiva_proto::QuestionOption {
+                    label: "同意".to_owned(),
+                    note: None,
+                },
+                odiva_proto::QuestionOption {
+                    label: "拒绝".to_owned(),
+                    note: Some(odiva_proto::Note {
+                        prompt: "为什么先不停？（可以留空）".to_owned(),
+                        required: false,
+                    }),
+                },
+                odiva_proto::QuestionOption {
+                    label: "要求解释".to_owned(),
+                    note: Some(odiva_proto::Note {
+                        prompt: "你想先知道什么？".to_owned(),
+                        required: true,
+                    }),
+                },
+            ],
+        },
+    });
+
+    script
+}
+
 /// Which conversation to photograph.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Fixture {
@@ -170,6 +203,7 @@ enum Fixture {
     Failed,
     Busy,
     Long,
+    Asking,
 }
 
 impl Fixture {
@@ -181,6 +215,7 @@ impl Fixture {
             Self::Failed => failed(),
             Self::Busy => busy(),
             Self::Long => long(),
+            Self::Asking => asking(),
         }
     }
 }
@@ -270,6 +305,7 @@ fn render_screenshots() {
         ("chat-busy", Fixture::Busy, true, false),
         ("chat-long", Fixture::Long, false, false),
         ("chat-light", Fixture::Chat, true, true),
+        ("chat-question", Fixture::Asking, true, false),
     ];
 
     for (name, fixture, following, light) in cases {

@@ -85,10 +85,53 @@ pub struct Snapshot {
     pub presence: Presence,
 }
 
+/// Which option of a question the person picked, and what they typed with it.
+///
+/// The option is an index into the question's own list: at most one question is
+/// outstanding, so nothing has to be correlated across messages.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Answer {
+    pub option: usize,
+    pub note: Option<String>,
+}
+
+/// What a question needs from the window.
+///
+/// This is the one structured decision the window can take, and it exists so
+/// that a state transition never depends on a model reading free text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Question {
+    pub question: String,
+    pub options: Vec<QuestionOption>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QuestionOption {
+    pub label: String,
+    /// When set, picking this option opens one line of input for it.
+    pub note: Option<Note>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Note {
+    pub prompt: String,
+    pub required: bool,
+}
+
+/// How a question ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Resolution {
+    /// The person picked an option.
+    Answered,
+    /// Nobody will answer: the turn was stopped, or the core moved on.
+    Withdrawn,
+}
+
 /// What the person did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UiMessage {
     UserSubmittedText { text: String },
+    AnswerQuestion(Answer),
     UserRequestedStop,
 }
 
@@ -108,6 +151,11 @@ pub enum CoreMessage {
     /// Whether the contact line reads "typing": the agent is working on
     /// something. Independent of messages, which arrive on their own schedule.
     PresenceChanged { presence: Presence },
+    /// A decision is needed, and free text will not do: the window turns its
+    /// composer off until `QuestionClosed` arrives.
+    QuestionAsked { question: Question },
+    /// The answer, or the end of the question. Either way, the composer is back.
+    QuestionClosed { resolution: Resolution },
     /// Something went wrong, and the window is the only place that can say so.
     ///
     /// Speech is her choice, so a failure has no messenger otherwise: the core

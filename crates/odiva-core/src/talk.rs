@@ -11,12 +11,27 @@ use yoagent::Agent;
 use yoagent::types::{AgentMessage, Content, Message, StopReason};
 
 use crate::error::Result;
+use crate::halt::Halt;
 use crate::line::{Line, LineId};
 use crate::roster::Roster;
 use crate::route::Route;
 use crate::say::Said;
 use crate::store::Store;
 use crate::transcript::Transcript;
+
+/// Everything one activation is built from.
+pub struct Activation<'a> {
+    pub store: &'a Store,
+    pub id: LineId,
+    pub route: &'a dyn Route,
+    pub prompt: &'a str,
+    pub roster: Roster,
+    pub said: Said,
+    /// What the core says into a line before its first turn — a handoff. Only
+    /// used when the line has never carried a message.
+    pub seed: Option<String>,
+    pub halt: Halt,
+}
 
 /// A conversation with its history loaded and its roster installed.
 pub struct Talk {
@@ -28,18 +43,18 @@ pub struct Talk {
 
 impl Talk {
     /// Opens a line and installs the roster on it.
-    ///
-    /// `seed` is what the core says into a line before its first turn — a
-    /// handoff. It is only used when the line has never carried a message.
-    pub fn open(
-        store: &Store,
-        id: LineId,
-        route: &dyn Route,
-        prompt: &str,
-        roster: Roster,
-        said: Said,
-        seed: Option<String>,
-    ) -> Result<Self> {
+    pub fn open(activation: Activation<'_>) -> Result<Self> {
+        let Activation {
+            store,
+            id,
+            route,
+            prompt,
+            roster,
+            said,
+            seed,
+            halt,
+        } = activation;
+
         let mut line = Line::open(store, id, prompt)?;
 
         if line.is_fresh()
@@ -48,7 +63,9 @@ impl Talk {
             line.push_note(seed)?;
         }
 
-        let agent = assemble(route, prompt, roster, &line.messages());
+        halt.clear();
+
+        let agent = assemble(route, prompt, roster, &line.messages(), halt);
 
         Ok(Self {
             agent,
@@ -180,12 +197,19 @@ impl Talk {
     }
 }
 
-fn assemble(route: &dyn Route, prompt: &str, roster: Roster, messages: &[AgentMessage]) -> Agent {
+fn assemble(
+    route: &dyn Route,
+    prompt: &str,
+    roster: Roster,
+    messages: &[AgentMessage],
+    halt: Halt,
+) -> Agent {
     roster.install(
         route
             .agent()
             .with_system_prompt(prompt)
             .with_messages(messages.to_vec())
+            .with_extension(halt)
             .without_context_management(),
     )
 }

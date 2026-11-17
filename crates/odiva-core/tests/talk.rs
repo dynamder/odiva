@@ -4,7 +4,8 @@ use std::path::PathBuf;
 
 use odiva_core::line::{LineId, Mode};
 use odiva_core::say::Said;
-use odiva_core::{Ids, Line, Roster, Say, Scripted, Store, Talk, Transcript};
+use odiva_core::halt::Halt;
+use odiva_core::{Ids, Line, Roster, Route, Say, Scripted, Store, Talk, Transcript};
 use odiva_proto::{CoreMessage, Side};
 use serde_json::json;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
@@ -62,6 +63,28 @@ fn shown(inbox: &mut UnboundedReceiver<CoreMessage>) -> Vec<(Side, String)> {
     messages
 }
 
+fn opening(
+    store: &Store,
+    id: LineId,
+    route: &dyn Route,
+    prompt: &str,
+    roster: Roster,
+    said: &Said,
+    seed: Option<String>,
+) -> Talk {
+    Talk::open(odiva_core::talk::Activation {
+        store,
+        id,
+        route,
+        prompt,
+        roster,
+        said: said.clone(),
+        seed,
+        halt: Halt::default(),
+    })
+    .expect("a line")
+}
+
 fn tools(out: UnboundedSender<CoreMessage>, ids: &Ids, said: &Said) -> Roster {
     Roster::of(vec![Box::new(Say::new(out, ids.clone(), said.clone()))])
 }
@@ -104,16 +127,7 @@ async fn one_turn_can_say_two_things_and_they_arrive_separately() {
     let said = Said::default();
     let route = Scripted::one(vec![saying("先说话，再干活。"), saying("干完了。"), done()]);
 
-    let mut talk = Talk::open(
-        &store,
-        idle(),
-        &route,
-        PROMPT,
-        tools(out, &ids, &said),
-        said.clone(),
-        None,
-    )
-    .expect("a line");
+    let mut talk = opening(&store, idle(), &route, PROMPT, tools(out, &ids, &said), &said, None);
 
     talk.turn(&ids.theirs("看下日志")).await.expect("a turn");
 
@@ -134,30 +148,12 @@ async fn a_second_activation_continues_the_same_line() {
 
     let first = Scripted::one(vec![saying("一"), done()]);
     let said = Said::default();
-    let mut talk = Talk::open(
-        &store,
-        idle(),
-        &first,
-        PROMPT,
-        tools(out.clone(), &ids, &said),
-        said.clone(),
-        None,
-    )
-    .expect("a line");
+    let mut talk = opening(&store, idle(), &first, PROMPT, tools(out.clone(), &ids, &said), &said, None);
     talk.turn(&ids.theirs("第一句")).await.expect("a turn");
 
     let second = Scripted::one(vec![saying("二"), done()]);
     let said = Said::default();
-    let mut talk = Talk::open(
-        &store,
-        idle(),
-        &second,
-        PROMPT,
-        tools(out, &ids, &said),
-        said.clone(),
-        None,
-    )
-    .expect("a line");
+    let mut talk = opening(&store, idle(), &second, PROMPT, tools(out, &ids, &said), &said, None);
     talk.turn(&ids.theirs("第二句")).await.expect("a turn");
 
     assert_eq!(store.newest_line(&idle()), Some(0), "one line, not two");
@@ -174,16 +170,7 @@ async fn the_transcript_keeps_what_the_window_showed() {
     let said = Said::default();
     let route = Scripted::one(vec![saying("在。"), done()]);
 
-    let mut talk = Talk::open(
-        &store,
-        idle(),
-        &route,
-        PROMPT,
-        tools(out, &ids, &said),
-        said.clone(),
-        None,
-    )
-    .expect("a line");
+    let mut talk = opening(&store, idle(), &route, PROMPT, tools(out, &ids, &said), &said, None);
 
     talk.turn(&ids.theirs("在吗")).await.expect("a turn");
 
@@ -210,16 +197,7 @@ async fn a_missing_attachment_says_nothing() {
     let said = Said::default();
     let route = Scripted::one(vec![attaching("/nowhere/plan.md"), done()]);
 
-    let mut talk = Talk::open(
-        &store,
-        idle(),
-        &route,
-        PROMPT,
-        tools(out, &ids, &said),
-        said.clone(),
-        None,
-    )
-    .expect("a line");
+    let mut talk = opening(&store, idle(), &route, PROMPT, tools(out, &ids, &said), &said, None);
 
     talk.turn(&ids.theirs("把计划发我")).await.expect("a turn");
 
@@ -233,30 +211,12 @@ async fn a_new_prompt_opens_the_next_generation() {
 
     let route = Scripted::one(vec![saying("一"), done()]);
     let said = Said::default();
-    let mut talk = Talk::open(
-        &store,
-        idle(),
-        &route,
-        "旧的话",
-        tools(out.clone(), &ids, &said),
-        said.clone(),
-        None,
-    )
-    .expect("a line");
+    let mut talk = opening(&store, idle(), &route, "旧的话", tools(out.clone(), &ids, &said), &said, None);
     talk.turn(&ids.theirs("第一句")).await.expect("a turn");
 
     let route = Scripted::one(vec![saying("二"), done()]);
     let said = Said::default();
-    let mut talk = Talk::open(
-        &store,
-        idle(),
-        &route,
-        "新的话",
-        tools(out, &ids, &said),
-        said.clone(),
-        None,
-    )
-    .expect("a line");
+    let mut talk = opening(&store, idle(), &route, "新的话", tools(out, &ids, &said), &said, None);
     talk.turn(&ids.theirs("第二句")).await.expect("a turn");
 
     assert!(store.line_path(&idle(), 0).exists(), "the old file stays");
@@ -275,29 +235,27 @@ async fn a_seed_only_enters_a_fresh_line() {
     let said = Said::default();
 
     let route = Scripted::one(vec![done()]);
-    let mut talk = Talk::open(
+    let mut talk = opening(
         &store,
         BUSY,
         &route,
         PROMPT,
         tools(out.clone(), &ids, &said),
-        said.clone(),
+        &said,
         Some("【交接】t1".to_owned()),
-    )
-    .expect("a line");
+    );
     talk.turn(&ids.theirs("继续")).await.expect("a turn");
 
     let route = Scripted::one(vec![done()]);
-    let mut again = Talk::open(
+    let mut again = opening(
         &store,
         BUSY,
         &route,
         PROMPT,
         tools(out, &ids, &said),
-        said.clone(),
+        &said,
         Some("【交接】不该进来".to_owned()),
-    )
-    .expect("a line");
+    );
     again.turn(&ids.theirs("再继续")).await.expect("a turn");
 
     let carried = text(&store, BUSY, 0);
