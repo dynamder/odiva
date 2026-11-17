@@ -82,6 +82,7 @@ impl AgentTool for Dispatch {
             .ask(ledger::Reserve {
                 origin: self.origin,
                 brief: brief::brief(&args.goal, &args.files, &args.constraints),
+                workspace: None,
             })
             .await
             .map_err(|_| lost())?;
@@ -89,6 +90,81 @@ impl AgentTool for Dispatch {
         let _ = self.odiva.tell(odiva::Fill).await;
 
         Ok(said(format!("派出去了：{id}。")))
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct AcceptArgs {
+    brief: String,
+    handoff: String,
+    workspace: String,
+}
+
+/// The idle-to-busy transition, as a tool.
+pub struct Accept {
+    records: ActorRef<Records>,
+    odiva: ActorRef<Odiva>,
+}
+
+impl Accept {
+    pub fn new(records: ActorRef<Records>, odiva: ActorRef<Odiva>) -> Self {
+        Self { records, odiva }
+    }
+}
+
+#[async_trait::async_trait]
+impl AgentTool for Accept {
+    fn name(&self) -> &str {
+        "accept_task"
+    }
+
+    fn label(&self) -> &str {
+        "Take the job"
+    }
+
+    fn description(&self) -> &str {
+        "Take a job the person asked for. Leaving idle is what this does, so the handoff matters: \
+         write down what you were doing, because that is what you come back to. `workspace` is the \
+         directory the worker may write in."
+    }
+
+    fn parameters_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "brief": { "type": "string", "description": "What has to be done, self-contained." },
+                "handoff": { "type": "string", "description": "One or two sentences about what you were doing in idle." },
+                "workspace": { "type": "string", "description": "Absolute path the worker may write in." }
+            },
+            "required": ["brief", "handoff", "workspace"]
+        })
+    }
+
+    async fn execute(&self, params: Value, _ctx: ToolContext) -> Result<ToolResult, ToolError> {
+        let args: AcceptArgs = serde_json::from_value(params)
+            .map_err(|error| ToolError::InvalidArgs(error.to_string()))?;
+
+        let id = self
+            .records
+            .ask(ledger::Reserve {
+                origin: Origin::User,
+                brief: args.brief,
+                workspace: Some(args.workspace.into()),
+            })
+            .await
+            .map_err(|_| lost())?;
+
+        let _ = self
+            .odiva
+            .tell(odiva::Accept {
+                task: id.clone(),
+                handoff: crate::handoff::Handoff {
+                    note: args.handoff,
+                },
+            })
+            .await;
+
+        Ok(said(format!("接了 {id}，我去忙。")))
     }
 }
 
@@ -382,6 +458,10 @@ pub fn roster(
         Box::new(List::new(records.clone())),
         Box::new(Read::new(records.clone())),
     ];
+
+    if mode == Mode::Idle {
+        tools.push(Box::new(Accept::new(records.clone(), odiva.clone())));
+    }
 
     if mode == Mode::Busy {
         tools.push(Box::new(Answer::new(records.clone(), odiva.clone())));

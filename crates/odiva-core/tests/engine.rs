@@ -76,6 +76,14 @@ fn idling(message: &str) -> MockResponse {
     }])
 }
 
+fn accepting(brief: &str, handoff: &str, workspace: &str) -> MockResponse {
+    MockResponse::ToolCalls(vec![MockToolCall {
+        name: "accept_task".to_owned(),
+        arguments: json!({ "brief": brief, "handoff": handoff, "workspace": workspace }),
+        provider_metadata: None,
+    }])
+}
+
 fn permitting(id: &str, allow: bool) -> MockResponse {
     MockResponse::ToolCalls(vec![MockToolCall {
         name: "task_permit".to_owned(),
@@ -398,15 +406,15 @@ async fn a_dispatched_task_comes_back_as_a_sentence() {
 }
 
 #[tokio::test]
-async fn a_task_in_flight_moves_the_conversation_to_the_busy_line() {
-    let store = scratch("engine-work-lane");
+async fn a_user_task_moves_the_conversation_to_the_busy_line() {
+    let store = scratch("engine-busy-line");
+    let workspace = store.root().join("ws");
+    let workspace = workspace.to_str().expect("a path");
+
     let route = Arc::new(Scripted::new(vec![
         vec![
-            MockResponse::ToolCalls(vec![MockToolCall {
-                name: "task_dispatch".to_owned(),
-                arguments: json!({ "goal": "改 README" }),
-                provider_metadata: None,
-            }]),
+            accepting("改 README", "正在整理记忆", workspace),
+            saying("接了。"),
             done(),
         ],
         vec![saying("在。"), done()],
@@ -417,16 +425,29 @@ async fn a_task_in_flight_moves_the_conversation_to_the_busy_line() {
     handle.send(UiMessage::UserSubmittedText {
         text: "把 README 改一下".to_owned(),
     });
-    drain(&mut inbox, 3).await;
+    drain_until(&mut inbox, |message| {
+        matches!(message, CoreMessage::MessageAppended { message } if message.markdown == "接了。")
+    })
+    .await;
 
     handle.send(UiMessage::UserSubmittedText {
         text: "顺便问一句".to_owned(),
     });
-    drain(&mut inbox, 4).await;
+    drain_until(&mut inbox, |message| {
+        matches!(message, CoreMessage::MessageAppended { message } if message.markdown == "在。")
+    })
+    .await;
 
     let busy = line(&store, busy(), 0);
-    assert!(busy[0].contains("【交接】"), "the busy line starts from the handoff");
-    assert!(busy[0].contains("t1"));
+    assert!(
+        busy[0].contains("【交接】"),
+        "the busy line starts from the handoff"
+    );
+    assert!(
+        busy[0].contains("正在整理记忆"),
+        "the handoff is the one she wrote, not one derived from a message"
+    );
+    assert!(busy.iter().any(|text| text.contains("顺便问一句")));
 
     let shown = transcript(&store);
     assert!(
@@ -443,8 +464,11 @@ async fn a_task_in_flight_moves_the_conversation_to_the_busy_line() {
 #[tokio::test]
 async fn agreeing_to_pause_moves_the_next_turn_off_the_busy_line() {
     let store = scratch("engine-parked");
+    let workspace = store.root().join("ws");
+    let workspace = workspace.to_str().expect("a path");
+
     let route = Arc::new(Scripted::new(vec![
-        vec![dispatching("改 README"), saying("派出去了。"), done()],
+        vec![accepting("改 README", "正在整理记忆", workspace), saying("接了。"), done()],
         vec![idling("先停一下"), done()],
         vec![saying("在。"), done()],
     ]));
@@ -456,7 +480,7 @@ async fn agreeing_to_pause_moves_the_next_turn_off_the_busy_line() {
     });
 
     drain_until(&mut inbox, |message| {
-        matches!(message, CoreMessage::MessageAppended { message } if message.markdown == "派出去了。")
+        matches!(message, CoreMessage::MessageAppended { message } if message.markdown == "接了。")
     })
     .await;
 
@@ -743,9 +767,16 @@ async fn a_task_that_asks_waits_for_words() {
 #[tokio::test]
 async fn a_permission_request_reaches_her_and_the_answer_goes_back() {
     let store = scratch("engine-permit");
+    let workspace = store.root().join("ws");
+    let workspace = workspace.to_str().expect("a path");
+
     let (handle, _inbox) = scripted_with(
         vec![
-            vec![dispatching("删掉 migrate_v1.sh"), done()],
+            vec![
+                accepting("删掉 migrate_v1.sh", "正在整理记忆", workspace),
+                saying("接了。"),
+                done(),
+            ],
             vec![permitting("t1", false), done()],
         ],
         &store,

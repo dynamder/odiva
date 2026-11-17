@@ -68,6 +68,7 @@ busy→idle 没有交接文档：退回 idle 的全部内容都是推导物。
 | 工具 | normal-idle | task-idle | normal-busy | task-busy |
 | --- | --- | --- | --- | --- |
 | `memory_*` | ✔ | — | — | — |
+| `accept_task` | ✔ | — | — | — |
 | `dispatch` | 兴趣 | — | 用户 | — |
 | `task_list` | ✔ | — | ✔ | — |
 | `task_read` | ✔ | ✔ | ✔ | ✔ |

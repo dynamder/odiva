@@ -80,6 +80,12 @@ pub struct CancelTask {
 /// The person agreed to stop work: this is the transition, not the request.
 pub struct Pause;
 
+/// A user task was accepted: leave idle, taking the note with you.
+pub struct Accept {
+    pub task: String,
+    pub handoff: Handoff,
+}
+
 pub struct Setup {
     pub store: Store,
     pub route: Arc<dyn Route>,
@@ -108,6 +114,7 @@ pub struct Odiva {
     turn: TurnCancel,
     asking: Asking,
     halt: Halt,
+    handoff: Option<Handoff>,
     runs: HashMap<String, Run>,
     permits: HashMap<String, oneshot::Sender<Decision>>,
     next_run: u64,
@@ -118,6 +125,8 @@ impl Actor for Odiva {
     type Error = Error;
 
     async fn on_start(args: Self::Args, _ctx: ActorRef<Self>) -> Result<Self> {
+        let handoff = crate::state::State::load(&args.store).handoff;
+
         Ok(Self {
             store: args.store,
             ids: Ids::default(),
@@ -132,6 +141,7 @@ impl Actor for Odiva {
             turn: args.turn,
             asking: args.asking,
             halt: args.halt,
+            handoff,
             runs: HashMap::new(),
             permits: HashMap::new(),
             next_run: 0,
@@ -189,6 +199,15 @@ impl Message<Permit> for Odiva {
             task.status = Status::OnHarness;
             self.update(task).await;
         }
+    }
+}
+
+impl Message<Accept> for Odiva {
+    type Reply = ();
+
+    async fn handle(&mut self, accept: Accept, ctx: &mut Context<Self, Self::Reply>) {
+        self.enter_busy(accept.task, accept.handoff).await;
+        self.fill(ctx).await;
     }
 }
 
@@ -310,17 +329,6 @@ impl Odiva {
         let busy = self.mode == Mode::Busy;
         let id = LineId::normal(if busy { Mode::Busy } else { Mode::Idle });
 
-        let jobs: Vec<String> = self
-            .records
-            .ask(ledger::Unfinished)
-            .await
-            .unwrap_or_default()
-            .iter()
-            .map(Task::line)
-            .collect();
-
-        let seed = busy.then(|| Handoff::of(user, &jobs).render());
-
         let mut talk = Talk::open(crate::talk::Activation {
             store: &self.store,
             id,
@@ -328,7 +336,7 @@ impl Odiva {
             prompt: &self.prompt,
             roster: self.roster(ctx, &spoken, busy),
             said: spoken,
-            seed,
+            seed: None,
             halt: self.halt.clone(),
         })?;
 
@@ -373,16 +381,46 @@ impl Odiva {
         Ok(())
     }
 
-    /// Starts every queued task the slots allow, and follows the mode from it.
-    async fn refresh_mode(&mut self) {
-        let live = !self
-            .records
-            .ask(ledger::Unfinished)
-            .await
-            .unwrap_or_default()
-            .is_empty();
+    /// A user task was accepted: the mode is no longer a guess.
+    async fn enter_busy(&mut self, _task: String, handoff: Handoff) {
+        self.mode = Mode::Busy;
+        self.handoff = Some(handoff.clone());
 
-        self.mode = if live { Mode::Busy } else { Mode::Idle };
+        let state = crate::state::State {
+            handoff: Some(handoff.clone()),
+        };
+
+        if let Err(error) = state.save(&self.store) {
+            self.journal.line(format!("写不了 state.json：{error}"));
+            self.emit(CoreMessage::CoreFailed {
+                note: format!("写不了 state.json：{error}"),
+            });
+        }
+
+        if let Err(error) = self.open_busy(&handoff).await {
+            self.journal.line(format!("进入忙线：{error}"));
+            self.emit(CoreMessage::CoreFailed {
+                note: format!("进入忙线：{error}"),
+            });
+        }
+    }
+
+    /// The busy line starts with the note and the work that is now on the table.
+    async fn open_busy(&self, handoff: &Handoff) -> Result<()> {
+        let mut note = handoff.render();
+
+        let all = self.records.ask(ledger::Unfinished).await.unwrap_or_default();
+
+        if !all.is_empty() {
+            note.push_str("\n手上的活：\n");
+
+            for task in all {
+                note.push_str(&format!("- {}\n", task.line()));
+            }
+        }
+
+        let mut line = Line::open(&self.store, LineId::normal(Mode::Busy), &self.prompt)?;
+        line.push_note(note)
     }
 
     /// The pause the person agreed to: stop everything, and go back to idle.
@@ -411,6 +449,12 @@ impl Odiva {
                 note: format!("离开忙线：{error}"),
             });
         }
+
+        self.handoff = None;
+
+        if let Err(error) = crate::state::State::default().save(&self.store) {
+            self.journal.line(format!("写不了 state.json：{error}"));
+        }
     }
 
     /// What the idle line is told when the work stops: the same facts a restart
@@ -419,6 +463,11 @@ impl Odiva {
         let all = self.records.ask(ledger::Everything).await.unwrap_or_default();
 
         let mut note = String::from("【回到空闲】\n");
+
+        if let Some(handoff) = &self.handoff {
+            note.push_str(&handoff.render());
+            note.push('\n');
+        }
 
         for task in all.iter().filter(|task| task.status == Status::Paused) {
             note.push_str(&format!("- 暂停：{}\n", task.line()));
@@ -439,7 +488,6 @@ impl Odiva {
     async fn fill(&mut self, ctx: &mut Context<Self, ()>) {
         loop {
             if self.runs.len() >= brief::SLOTS {
-                self.refresh_mode().await;
                 return;
             }
 
@@ -453,7 +501,6 @@ impl Odiva {
                 .into_iter()
                 .find(|task| task.status == Status::OnSlot)
             else {
-                self.refresh_mode().await;
                 return;
             };
 
@@ -496,7 +543,6 @@ impl Odiva {
         }
 
         self.update(task).await;
-        self.refresh_mode().await;
     }
 
     async fn lookup(&self, id: &str) -> Option<Task> {

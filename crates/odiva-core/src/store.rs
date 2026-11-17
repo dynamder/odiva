@@ -36,6 +36,10 @@ impl Store {
         self.root.join("transcript.jsonl")
     }
 
+    pub fn state(&self) -> PathBuf {
+        self.root.join("state.json")
+    }
+
     pub fn tasks(&self) -> PathBuf {
         self.root.join("tasks")
     }

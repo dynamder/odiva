@@ -44,6 +44,9 @@ impl Actor for Records {
 pub struct Reserve {
     pub origin: Origin,
     pub brief: String,
+    /// Where the task works. The person's own directory when they named one;
+    /// otherwise a directory of the ledger's making.
+    pub workspace: Option<PathBuf>,
 }
 
 impl Message<Reserve> for Records {
@@ -52,7 +55,9 @@ impl Message<Reserve> for Records {
     async fn handle(&mut self, msg: Reserve, _ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
         let id = self.ledger.reserve();
         let task = Task {
-            cwd: self.ledger.dir().join(&id),
+            cwd: msg
+                .workspace
+                .unwrap_or_else(|| self.ledger.dir().join(&id)),
             id: id.clone(),
             origin: msg.origin,
             brief: msg.brief,
