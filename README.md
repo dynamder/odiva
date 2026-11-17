@@ -2,18 +2,20 @@
 
 A desk companion that talks like a chat app and dispatches coding harnesses.
 
-The window is a plain messenger: messages, files, quick replies. It has no
-concept of tasks, progress or harnesses — everything it shows, the agent chose to
-say. That is the whole design; see `docs/000-overview.md`.
+The window is a plain messenger: messages, files, quick replies, and — when the agent needs a
+decision — one blocking question card instead of the composer. It has no concept of tasks,
+progress or harnesses; everything it shows, the agent chose to say. That is the whole design;
+see `docs/000-overview.md`.
 
 ## Layout
 
 ```
 crates/
-├── odiva-proto/   the seam: messages, presence, a `CoreHandle` trait. No deps.
-├── odiva/         the chat window (iced). Holds no truth, only layout.
-├── odiva-core/    the core: the ACP client, and a harness that does as it is told
-└── ericed/        vendored from ../sofaia — widgets, palette, windowed list
+├── odiva-proto/     the seam: messages, presence, a blocking question, a `CoreHandle` trait
+├── odiva-harness/   ACP: processes, sessions, `Run`, escalation. The only place ACP types live
+├── odiva/           the chat window (iced). Holds no truth, only layout
+├── odiva-core/      the core: the `Odiva` actor, context lines, the ledger, the tools
+└── ericed/          vendored from ../sofaia — widgets, palette, windowed list
 ```
 
 `docs/`:
@@ -21,12 +23,13 @@ crates/
 | | |
 | --- | --- |
 | [000](docs/000-overview.md) | the three faces, three invariants, what is out of scope |
-| [001](docs/001-protocol.md) | the window↔core protocol, and why it has no task in it |
+| [001](docs/001-protocol.md) | the window↔core protocol: messages, the question card, and why it has no task in it |
 | [002](docs/002-ui.md) | the window: rules, palette, the layout ledger, iced's traps |
-| [003](docs/003-plan.md) | milestones, and what is actually built |
+| [003](docs/003-plan.md) | migration phases P0–P6, what is actually built, what is blocked |
 | [004](docs/004-memory.md) | markdown + tantivy, tool-first retrieval, no embeddings |
-| [005](docs/005-execution.md) | one middleman, N ACP workers, the task ledger |
-| [006](docs/006-core.md) | the core: agent = context + tools, lanes, `say`, budgets |
+| [005](docs/005-execution.md) | harness processes, runs, quotas, pause/resume, the task ledger |
+| [006](docs/006-core.md) | outside facts: ACP, harness products, yoagent |
+| [007](docs/007-core.md) | the core: states, context lines, four rosters, cancellation, questions, escalation |
 
 ## Build
 
@@ -36,9 +39,8 @@ cargo test -p odiva --test render # rewrite target/ui-*.png for review
 cargo run -p odiva                # open the window, connected to the core
 ```
 
-The window owns no conversation: `ODIVA_HOME` says where the core keeps its lanes
-(defaults to `./.odiva`), and `ODIVA_HARNESS` names the harness program it may
-start (defaults to `dsh`).
+The window owns no conversation: `ODIVA_HOME` says where the core keeps its lines
+(defaults to `./.odiva`), and `ODIVA_HARNESS` names the harness program it may start (defaults to `dsh`).
 
 The screenshots in `target/` are the design review loop: each one is a script of
 `CoreMessage`s replayed into a fresh window, so a picture that cannot be produced
@@ -61,15 +63,20 @@ ODIVA_LOG=debug cargo run -p odiva
 
 ## State
 
-The window is connected to the core. `main` builds the engine and spawns it;
+The window is connected to the core. `main` starts the runtime and the `Odiva` actor;
 `App::subscription` turns its `CoreMessage`s into `Message::CoreReported`, so the
-only thing that can change the transcript is still `App::apply`. The protocol is
-down to three variants: a message either arrived whole or did not arrive.
+only thing that can change the transcript is still `App::apply`.
 
-`crates/odiva-core` has the engine, the talk lane, `say`, and the task ledger. A
-turn still needs a harness on `PATH` and a model credential; without them the
-window opens and attaches, and a turn fails with a sentence on stderr. The design
-is [006](docs/006-core.md).
+**The docs are ahead of the code.** `docs/007-core.md` is the agreed model; the code is
+still on the old one (an engine that builds a short-lived activation per turn and derives
+"busy" from the ledger). [003](docs/003-plan.md) lists the migration: P1 splits ACP out into
+`odiva-harness`, P2 moves lines onto `yoagent::Session`, P3 replaces the engine with the
+`Odiva`/`Ledger` actors, P4 adds the state machine and the four rosters, P5 adds compaction
+and `view_history`. Until P1 lands, `crates/odiva-harness` does not exist yet and
+`crates/odiva-core` is the old engine.
+
+A turn still needs a harness on `PATH` and a model credential; without them the
+window opens and attaches, and a turn fails with a sentence on stderr.
 
 Dependencies are fetched with escalation: the sandboxed toolchain cannot reach
 the TLS credential store, so `cargo add` and `cargo fetch` need it once. After

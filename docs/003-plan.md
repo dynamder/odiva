@@ -1,47 +1,63 @@
-# 003 Plan
+# 003 计划
+
+设计与事实分家：新模型在 [007](007-core.md)，外部基座在 [006](006-core.md)，执行层在 [005](005-execution.md)。
+本文只有两件东西：迁移阶段，和"现在到哪了"。
+
+## 迁移阶段
+
+| 阶段 | 内容 | 验收 |
+| --- | --- | --- |
+| **P0** | 文档改写：README + 000–007 全部对齐新设计 | 只有一份模型描述，没有互相矛盾的段落 |
+| **P1** | 拆出 `odiva-harness`：ACP 会话、`Run`、结构化 `Ask`、`session/load` 探测 | `cargo test --workspace` 全绿，零行为变化 |
+| **P2** | `line/` + `transcript`：线改用 `yoagent::Session`，工具调用进历史；窗口记录单独一份 | 旧 engine 改跑在 normal-idle 上，现有 engine 测试全绿 |
+| **P3** | `Odiva` / `Ledger` / wire pump 三个新模块；删 `engine` `talk` `tasks` `parked` `waiting` | 599 行 engine 测试逐条迁移后通过 |
+| **P4** | 状态机、两条 normal 线 + 任务线、四个 roster、`Intent`、超时与饥饿、提问组件、提权策略 | 转换载荷、超时回 normal、饥饿强制回、兴趣任务提权被拒、暂停三选项全路径 |
+| **P5** | 压缩、`view_history`、预算与 say 限流接上 | 压缩后 `HistoryDiverged` 不出现；预算只扣 idle 自触发 |
+| **P6** | `drive` 示例、README、注释清洗 | 人能跑的东西还在，注释占比 < 5% |
+
+每个阶段都可编译、可跑、可提交；一个阶段 1–3 个 conventional commit。
+
+## 之后的功能里程碑
 
 | | 内容 | 验收 |
 | --- | --- | --- |
-| **M0** | proto + UI（已完成） + 一个真 ACP harness + 可运行窗口 | 能派一个任务、能看到她说话、关窗隐藏、进程不死 |
-| **M1** | 记忆（004）：journal → facts、tantivy + 中文分词 | 她记得上周的事 |
+| **M1** | 记忆（[004](004-memory.md)）：journal → facts、tantivy + 中文分词 | 她记得上周的事 |
 | **M2** | stage 子进程 + Live2D + 口型 | 屏幕上有个会动的东西 |
-| **M3** | 第二个 harness、目录隔离、权限策略（005） | 能并行不打架 |
+| **M3** | 第二个 harness 产品（codex / pi）、多产品注册表 | 能并行不打架 |
 
-M0 里就能验证最关键的假设：**任务状态在 core、会话可丢弃** 能不能撑住 harness 异构。撑不住，后面全要重来。
+P4 之前就能验证最关键的假设：**状态是她的决定、线是记录、进程可丢弃** 能不能撑住 harness 异构。
+撑不住，后面全要重来。
 
 ## 现在到哪了
 
 | | 状态 |
 | --- | --- |
+| `crates/odiva-proto` | 四个 `CoreMessage` + 两个 `UiMessage`；提问组件尚未加（P4） |
+| `crates/odiva` | 聊天窗口：markdown、文件、快捷回复、时间分隔、虚拟化、贴底与跟随；接上 core |
+| `crates/odiva-core` | 旧模型：engine、talk 线、任务台账、五个任务工具、假 harness |
 | `crates/ericed` | vendor 自 `../sofaia`，编译通过，示例自带断言 |
-| `crates/odiva-proto` | 四个变体 + `CoreHandle`，零依赖 |
-| `crates/odiva` | 聊天窗口：markdown、文件、快捷回复、时间分隔、虚拟化、贴底与跟随；`CoreHandle` 出站、subscription 入站，接上 core |
-| `crates/odiva-core` | ACP 客户端、talk 线、引擎（presence/排队/中止）、任务台账与五个任务工具；假 harness 四个脚本 |
+| 文档 | P0 完成：007 是新设计的唯一出处 |
 
-窗口的验证方式有两个，都在 CI 里跑：
-
-- `crates/odiva/tests/protocol.rs`：`App::apply` 是唯一入口；一条 `say` 一条气泡；400 条消息只建 <40 行；短对话有 headroom。
-- `crates/odiva/tests/render.rs`：六个场景出图（空、对话、干活中、六任务、300 条、浅色），图在 `target/`。
-
-## 下一步
-
-M0 的切片顺序和每个切片的产物写在 006 末节 —— 这里不重复，避免两份清单漂移。
-
-切片 1、2、3、5 已完成：假 harness、协议瘦身、`say` 与 talk 激活、任务台账；窗口也已接上 core（引擎由 `main` 起、`App::subscription` 收消息）。剩下的是切片 4（真模型，缺凭据）与切片 6（idle 三件事里的预算与自由时段；记忆与水位线不在这一轮）。
-
-busy 态的线分离、权限上行、`request_idle`、自压缩都已完成：任务在跑时激活跑在 `work.session.<n>.jsonl` 上，以交接摘要起根；公开记录照旧只写 talk 线；worker 问权限时停下等人（`OnPermission` + `task_permit`）；talk 线用到窗口 60% 就轮转到下一代，旧的留着。
-
-预算也写好了（`contexts/budget.json`，跨天重置，只约束 idle 的自由时段与整理），但**自由时段本身还没写**——没有 roam，预算就只有账本没有客户。这是 006 里最后一块没落地的。
+代码仍在旧模型上（`Engine` 每轮一次激活、从台账推导忙碌），与新文档的差异见
+[007](007-core.md) §13 的对照表。P1 开始按上面的顺序改。
 
 ## 阻塞（不是设计问题）
 
-- 沙箱内进程拿不到 TLS（`SEC_E_NO_CREDENTIALS`）：`cargo add` / `cargo fetch` 要在提权下跑，之后依赖留在本地 registry，`--offline` 照常。
-- `dsh --profile acp` 写 `$DSH_HOME/profiles/<name>`，而沙箱内 `~/.dsh` 不可写：跑真 harness 得把 `DSH_HOME` 指到工作区（`target/dsh-home` 已验证可用）。
-- 真模型还差一个模型凭据：隔离出来的 `DSH_HOME` 里没有 `.credentials.yaml`，prompt 会以 `no API key for provider route` 报错——这一条要人来给。
+- 沙箱内进程曾经拿不到 TLS（`SEC_E_NO_CREDENTIALS`）：`cargo add` / `cargo fetch` 需要一次提权，
+  之后依赖留在本地 registry，`--offline` 照常。
+- `dsh --profile acp` 写 `$DSH_HOME/profiles/<name>`，而沙箱内 `~/.dsh` 不可写：跑真 harness 得把
+  `DSH_HOME` 指到工作区（`target/dsh-home` 已验证可用）。
+- 真模型需要模型凭据：隔离出来的 `DSH_HOME` 里没有凭据文件，prompt 会以 `no API key for provider route`
+  报错——这一条要人来给。
 
 ## 待定
 
-- 桌面窗口怎么拿到初始视口高度：现在靠 `sensor` + 首帧重排，真窗口里要在 boot 时问一次 `window::size`。
-- `Worker::talk` 没有墙钟超时：卡住的 harness 会一直占着（它自己的 `--timeoutMs` 只管工具）。要不要加、加在哪，归 005 的槽与重启决定。
+这些不影响 P1–P6，但迟早要定：
 
-core 内部的默认值与未定项只在 006 维护。
+- 记忆的具体实现（分词的起步方案、水位线）。
+- "上网"的形态：MCP 还是专用浏览器。
+- 兴趣任务的工作区配置；harness 注册表（多产品）与各自参数。
+- 提权白名单文件的格式与位置。
+- 预算、配额、各定时器的默认数值。
+- 封存的任务线保留多久（`view_history` 能回溯多远）。
+- 用户"验收"的交互形态；同一 busy 期多个用户任务的排队与优先级。

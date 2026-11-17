@@ -1,43 +1,56 @@
-# 005 Execution
+# 005 执行
 
-一个中间人，N 个 harness 子进程。中间人就是 `000` 里说的那个"她"——它读对话、决定派活、决定说什么。
+一个任务 = 一个工作区 + 一条上下文线 + 一串 `Run`。odiva 的状态机与上下文线见 [007](007-core.md)；
+本文只讲 harness 那一侧的进程、配额与台账。
 
-## 和 dsh-superagent 的关系
+## harness agent
 
-它的结构值得借：常驻 Router 收消息分派、多个上下文隔离的 Worker 在独立目录里干活、干完回到原对话交付。我们抄的是这个形状，两处必须偏离：
+harness 是外部产品，经 ACP 调用：dsh、codex、pi……它们各有自己的模型、工具、沙箱和死亡方式。
+core 只需要知道三件事：怎么启动它（`HarnessSpec`：程序、参数、环境）、它的工作目录（就是沙箱边界）、
+它支不支持 `session/load`（`initialize` 的能力位，探测出来的）。
 
-1. **它不是产品，我们也不比轨迹详细度。** 想看完整轨迹，dsh 永远更详细更准。odiva 交付的是**判断**——"拆成六件，五件在跑，其中两件要改同一个 crate 所以串行"这句话，dsh 不会说。想翻轨迹，一个点击跳过去。
-2. **我们的子单元是外部进程。** harness 有自己的 cwd、模型、权限和**独立的死亡方式**；它们之间没有共享上下文，交接只能靠 brief + 文件。所以 brief 必须自包含，回报必须结构化——这跟同一进程里的 subagent 是两件事。
+它们的会话不由我们管理。台账只记 `sessions: [SessionId]`（可能多个），我们从不假设能续；
+续不上就开新会话，把同一份 brief 再给一次。
 
-由此推出一条硬结论：**任务台账以磁盘为准，中间人的记忆只是缓存。** 重启后不能指望它"记得"有两个任务在跑，core 必须主动告诉它。
+## 一个 Run
 
-## 会话可丢弃
+```
+spawn → initialize → session/load(有 id 且能力位允许) 否则 session/new(cwd)
+      → prompt(brief 或指令) → 收 update → 结束（end_turn / cancel / 死）
+```
 
-ACP 的 `end_turn` 只代表"这一轮说完了"。harness 可能崩、可能换、不支持 `session/load`。所以：
+- **进程在任务在飞期间保留**，同一个 ACP 会话连续喂多轮。这样"等你说话"的任务不必每轮重开进程。
+- 一个 Run 结束不等于任务结束：`end_turn` 只代表这一轮说完了。
+- 只有 `Run` 会被杀。odiva 的生成不归这里管。
 
-- 任务 = core 里的一条持久记录（id、目标、cwd、产物、阻塞点）；
-- 会话 = 干活用的子进程，随时可以失败、重开、换 harness 接管。
+## 配额
 
-副作用是好的：harness 异构（有的支持 resume、有的不支持）不会渗透到产品逻辑里。
+- `max_concurrent_runs`（默认 3）管的是**在飞 Run**：已经发出 prompt、还没结束。活着的进程不占配额。
+- 卡在提权上的会话不占配额——它没有在跑，占着配额会死锁（三个任务同时提权就排不进第四个）。
+- **同一工作区同时只允许一个在飞 Run**：同一个目录里两个 harness 并行改，冲突比省下的时间贵。
+  不同工作区并行。
+- 用户任务优先于兴趣任务；`Status::OnSlot` 只表示"等一个 Run 配额"。
 
 ## 在等谁
 
 任务的状态不写成状态码，写成一句"它在等什么"：
 
-| | 含义 | 卡面 |
-| --- | --- | --- |
-| `OnHarness` | 正常干活，可跨多轮 | 在跑 |
-| `OnPermission` | 卡在一个 ACP 权限请求上，等人或中间人答 | 等你批准 |
-| `OnInstruction` | 一轮结束了，在等一句指示 | 等你说话 |
-| `OnSlot` | 并发槽满了 | 排队 |
-| `OnTrigger` | 活儿干完了，等下一件事 | 已完成 |
-| `Failed` | 失败，附原因 | 失败 |
+| | 含义 | 卡面 | 占配额 |
+| --- | --- | --- | --- |
+| `OnHarness` | 一轮在跑 | 在跑 | ✔ |
+| `OnPermission` | 卡在提权上，等人或 odiva 答 | 等你批准 | — |
+| `OnInstruction` | 一轮结束了，在等一句指示 | 等你说话 | — |
+| `OnSlot` | 等一个 Run 配额（或等工作区空出来） | 排队 | — |
+| `Paused` | 回 idle 时被暂停，进程已停 | 暂停 | — |
+| `Done` | 干完了，等下一件事 | 已完成 | — |
+| `Cancelled` | 被叫停（odiva 或用户的意图） | 已停止 | — |
+| `Failed` | 失败，附原因 | 失败 | — |
 
-`OnPermission` 占着槽（进程活着并在等答复），`OnInstruction` 不占（一轮已结束，可以让位）。二者的进程行为完全不同，所以是两个状态而不是一个。
+`Paused` 与 `Failed` 必须分开：暂停是用户的决定，失败是事实。
 
-`OnInstruction` 怎么来：worker 的最后一轮以 `end_turn` 结束，报告里带 `status: need` 和一个问题。ACP 没有 elicitation，所以"主动上报"只能是这个形状——**结束一轮再问**，不是中途插话。
+## 报告
 
-报告信封是 brief 里定死的：
+harness 的一轮用 `end_turn` 结束时，最后要留一个信封：
 
 ````
 ```report
@@ -46,41 +59,36 @@ ACP 的 `end_turn` 只代表"这一轮说完了"。harness 可能崩、可能换
 ````
 
 core 只解析 `status`；缺信封按 `done` 处理并记诊断，永不因为解析失败丢掉工人的产出。
+`need` 让任务进 `OnInstruction`，`blocked` 让它进 `Failed`。
 
-**这套东西不进协议，也不进 UI。** 协议只传消息，UI 只画消息；agent 把状态翻译成人话。这是 `001` 里"协议没有 task"的另一面。
+这套东西不进协议，也不进 UI。协议只传消息与提问；odiva 把状态翻译成人话。
 
-## 并发与优先级
+## brief
 
-- `max_concurrent` 个槽；满了新任务进 `OnSlot`。
-- **用户插话永远不排队。** 用户输入直接进主上下文；worker 事件是"外部消息"，只在中间人空闲时投递，进行中先暂存并按任务合并。
-- 派活时要写 brief：目标 + 相关文件 + 约束。连贯是双向的——不仅向后记得，向前也要交代清楚。
-- **talk 线只放公开记录。** worker 回报进对话的是"一句话 + `task_read(id)`"，正文留在 `tasks/<id>.json`；编排推理留在 work 线里，不进对话（见 006）。
-- 用户任务优先于 self 任务：self 占着槽时，用户任务进来可以抢占它。
+派活时写 brief：目标 + 相关文件 + 约束。harness 看不到任何对话，所以 brief 必须自包含。
+`accept_task` 的参数就是交接，`task_dispatch` 的参数就是 brief——两者的形状都由类型保证。
 
-## 每个任务的目录
+环境变量：`ODIVA_TASK_DIR`、`ODIVA_TASK_ID`、`ODIVA_HARNESS`，以及 `DSH_HOME`、`DSH_PERMISSION_MODE`。
 
-- 一个任务一个目录；改代码类任务用 `git worktree`，其余给独立空目录，打游戏这类可以什么都不给。
-- `prepare` 命令在第一次派活前跑一次（建 worktree、装依赖），有超时，失败就把任务判失败并记下输出。
-- 环境变量传给 harness：`ODIVA_TASK_DIR`、`ODIVA_TASK_ID`、`ODIVA_HARNESS`，以及 `DSH_HOME`（隔离 profile 与凭据）和 `DSH_PERMISSION_MODE`（按任务预设策略）。
+## 暂停与恢复
 
-`DSH_HOME` 不是洁癖：默认的 `~/.dsh` 对沙箱内进程不可写，`dsh --profile acp` 会在 `mkdir profiles/<name>` 上直接 EPERM，连 `initialize` 都过不去。指到任务目录下就没事。另外 dsh 的 spill store 要在 `%TEMP%` 建临时目录，拿不到只警告一条、继续跑。
-- **`cwd` 就是沙箱边界。** dsh 的 `workspaceRoot` 取的是进程的 cwd，写边界外会作为权限请求上行 —— 这条不是我们实现的，是拿来的。
-- 这是**默认值，不是安全边界**——worker 跑在同一个用户下，能按绝对路径执行任何东西。真正拦住它的是 harness 自己的沙箱。
+暂停（busy→idle）在进程侧的顺序：
 
-## 权限
+1. 对每个在飞 Run 发 ACP `session/cancel`；
+2. 宽限 5s，仍未结束 → kill 子进程；
+3. 台账写 `Paused`，记下 `session_id` 与 `pid`。
 
-ACP 的权限请求天然上行到 client，所以权限归窗口这一层，不归 harness。
-
-- 用户的任务：**停下来问人。** worker 卡在请求上（`OnPermission`，占着槽），core 把工具给的标题记进台账，她再决定怎么把它说给对方听；对方的回答回来之后，她用 `task_permit` 把批或不批送回去。一次只问一个，不批量弹窗。
-- 自由时段派出去的活（`origin: Own`）：**一律自动拒绝**——没人在看，它不该打断任何人（见 006）。
-- 桌宠形态下，权限卡内联在对话里，可键盘应答——模态会抢走输入法。现在没有卡片，用的是一条 `say` 加两个 `replies`；按钮点下去和打字是一样的，所以这条链在没有新协议的情况下也是通的。
+恢复（回到 busy 后跑 `Paused` 任务）：spawn → initialize → 能力位允许且有 id 则 `session/load`，
+否则 `session/new` + brief（并记下"这个 harness 不能续"）。长任务因此不会从头做一遍。
 
 ## 重启
 
-- 主 agent 的对话 append 到 `contexts/talk.session.<n>.jsonl`；启动时回放尾部 N 轮加一句滚动摘要（见 006 的上下文管理）。
-- 快照里必须同时有 transcript 和"当前还在跑的任务"，否则重启后 UI 上那些气泡会消失，尽管任务还活着。
-- 断线的任务不自动重派：发一条带 chips 的消息问人，这是唯一诚实的做法。
+- 启动恒为 Idle（[007](007-core.md) §12）：所有非终态任务标 `Paused`。
+- 按台账里的 `pid` 清掉仍存活的孤儿进程（Windows 上父进程被强杀不会带走子进程）。
+- 断线的任务不自动重派：由 odiva 在 idle 里看到它们，再由用户决定。
 
-## 待定
+## 权限
 
-DSH 是否支持 ACP、第一个 adapter 接谁——都已确认（原生 ACP v1；先用 dsh，opencode 作为第二个）。其余待定项只在 003 与 006 维护。
+提权是 harness 的请求上行到 client，判定在 core：四档策略与结构化 `Ask` 见 [007](007-core.md) §8。
+本文只补一条：**这不是安全边界，是摩擦力的调节。** harness 跑在同一个用户下，能按绝对路径做任何事；
+真正拦住它的是 harness 自己的沙箱，我们的策略只是决定"哪些越界值得打断人"。
