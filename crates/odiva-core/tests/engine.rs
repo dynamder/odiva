@@ -7,7 +7,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use odiva_core::line::{LineId, Mode};
-use odiva_core::{Engine, Handle, Harness, Route, Scripted, Store, Transcript};
+use odiva_core::task::{Ledger, Status, Task};
+use odiva_core::{Handle, Harness, Route, Scripted, Store, Transcript, start};
 use odiva_proto::{CoreHandle, CoreMessage, Presence, Side, UiMessage};
 use serde_json::json;
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -47,12 +48,52 @@ fn scripted(
     turns: Vec<Vec<MockResponse>>,
     store: &Store,
 ) -> (Handle, UnboundedReceiver<CoreMessage>) {
-    let route = Arc::new(Scripted::new(turns));
-    let (engine, handle, messages) =
-        Engine::new(store.clone(), route, PROMPT, harness("chat")).expect("an engine");
+    scripted_with(turns, store, "chat")
+}
 
-    tokio::spawn(engine.run());
-    (handle, messages)
+fn scripted_with(
+    turns: Vec<Vec<MockResponse>>,
+    store: &Store,
+    script: &str,
+) -> (Handle, UnboundedReceiver<CoreMessage>) {
+    let route = Arc::new(Scripted::new(turns));
+    start(store.clone(), route, PROMPT, harness(script))
+}
+
+fn dispatching(goal: &str) -> MockResponse {
+    MockResponse::ToolCalls(vec![MockToolCall {
+        name: "task_dispatch".to_owned(),
+        arguments: json!({ "goal": goal }),
+        provider_metadata: None,
+    }])
+}
+
+fn permitting(id: &str, allow: bool) -> MockResponse {
+    MockResponse::ToolCalls(vec![MockToolCall {
+        name: "task_permit".to_owned(),
+        arguments: json!({ "id": id, "allow": allow }),
+        provider_metadata: None,
+    }])
+}
+
+/// Waits for the one task on disk to stop running, and returns it.
+async fn settled(store: &Store) -> Task {
+    for _ in 0..400 {
+        let ledger = Ledger::at(store.tasks()).expect("a ledger");
+
+        if let Some(task) = ledger.all().into_iter().find(|task| {
+            !matches!(
+                task.status,
+                Status::OnHarness | Status::OnSlot | Status::OnPermission(_)
+            )
+        }) {
+            return task;
+        }
+
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+
+    panic!("the task never settled");
 }
 
 /// Collects the next `count` messages, or panics when the engine goes quiet.
@@ -259,8 +300,7 @@ impl StreamProvider for Patient {
 async fn a_message_sent_mid_turn_waits_its_turn() {
     let store = scratch("engine-queued");
     let route = Arc::new(Patient::default());
-    let (engine, handle, mut inbox) = Engine::new(store, route, PROMPT, harness("chat")).expect("an engine");
-    tokio::spawn(engine.run());
+    let (handle, mut inbox) = start(store, route, PROMPT, harness("chat"));
 
     handle.send(UiMessage::UserSubmittedText {
         text: "一".to_owned(),
@@ -283,8 +323,7 @@ async fn a_message_sent_mid_turn_waits_its_turn() {
 async fn stopping_ends_the_turn_without_an_answer() {
     let store = scratch("engine-stop");
     let route = Arc::new(Patient::default());
-    let (engine, handle, mut inbox) = Engine::new(store, route, PROMPT, harness("chat")).expect("an engine");
-    tokio::spawn(engine.run());
+    let (handle, mut inbox) = start(store, route, PROMPT, harness("chat"));
 
     handle.send(UiMessage::UserSubmittedText {
         text: "慢慢想".to_owned(),
@@ -365,9 +404,7 @@ async fn a_task_in_flight_moves_the_conversation_to_the_busy_line() {
         vec![saying("在。"), done()],
     ]));
 
-    let (engine, handle, mut inbox) =
-        Engine::new(store.clone(), route, PROMPT, harness("slow")).expect("an engine");
-    tokio::spawn(engine.run());
+    let (handle, mut inbox) = start(store.clone(), route, PROMPT, harness("slow"));
 
     handle.send(UiMessage::UserSubmittedText {
         text: "把 README 改一下".to_owned(),
@@ -418,9 +455,7 @@ async fn asking_to_be_idle_moves_the_next_turn_off_the_busy_line() {
         vec![saying("在。"), done()],
     ]));
 
-    let (engine, handle, mut inbox) =
-        Engine::new(store.clone(), route, PROMPT, harness("slow")).expect("an engine");
-    tokio::spawn(engine.run());
+    let (handle, mut inbox) = start(store.clone(), route, PROMPT, harness("slow"));
 
     handle.send(UiMessage::UserSubmittedText {
         text: "把 README 改一下".to_owned(),
@@ -491,9 +526,7 @@ async fn a_task_that_dies_is_never_silent() {
         vec![done()],
     ]));
 
-    let (engine, handle, mut inbox) =
-        Engine::new(store, route, PROMPT, harness("crash")).expect("an engine");
-    tokio::spawn(engine.run());
+    let (handle, mut inbox) = start(store, route, PROMPT, harness("crash"));
 
     handle.send(UiMessage::UserSubmittedText {
         text: "去试试".to_owned(),
@@ -629,5 +662,55 @@ async fn silence_after_the_reminder_is_a_choice() {
         bubbles(&messages),
         vec![(Side::User, "随便说点".to_owned())],
         "silence is still an answer"
+    );
+}
+
+#[tokio::test]
+async fn a_task_that_asks_waits_for_words() {
+    let store = scratch("engine-need");
+    let (handle, _inbox) = scripted_with(
+        vec![
+            vec![dispatching("删掉 migrate_v1.sh"), done()],
+            vec![saying("它问了一件事。"), done()],
+        ],
+        &store,
+        "need",
+    );
+
+    handle.send(UiMessage::UserSubmittedText {
+        text: "把那个脚本处理掉".to_owned(),
+    });
+
+    let task = settled(&store).await;
+
+    assert_eq!(task.status, Status::OnInstruction, "said: {}", task.said);
+    assert_eq!(
+        task.report.and_then(|report| report.question).as_deref(),
+        Some("这个脚本还有别处引用，删掉吗？")
+    );
+}
+
+#[tokio::test]
+async fn a_permission_request_reaches_her_and_the_answer_goes_back() {
+    let store = scratch("engine-permit");
+    let (handle, _inbox) = scripted_with(
+        vec![
+            vec![dispatching("删掉 migrate_v1.sh"), done()],
+            vec![permitting("t1", false), done()],
+        ],
+        &store,
+        "permission",
+    );
+
+    handle.send(UiMessage::UserSubmittedText {
+        text: "把那个脚本处理掉".to_owned(),
+    });
+
+    let task = settled(&store).await;
+
+    assert!(
+        task.said.contains("denied:reject-once"),
+        "the worker was told no, by name: {}",
+        task.said
     );
 }

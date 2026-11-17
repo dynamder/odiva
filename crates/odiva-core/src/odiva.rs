@@ -1,0 +1,566 @@
+//! The actor that thinks: one mailbox, one turn at a time, one owner of state.
+
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use kameo::Actor;
+use kameo::actor::ActorRef;
+use kameo::message::{Context, Message};
+use odiva_harness::{Decision, Turn};
+use odiva_proto::{CoreHandle, CoreMessage, Presence, Snapshot, UiMessage, WireMessage};
+use tokio::sync::{mpsc, oneshot};
+
+use crate::brief;
+use crate::error::{Error, Result};
+use crate::handoff::Handoff;
+use crate::harness::Harness;
+use crate::ids::Ids;
+use crate::journal::Journal;
+use crate::ledger::{self, Records};
+use crate::line::{LineId, Mode};
+use crate::parked::Parked;
+use crate::prompt::AFTER_SILENCE;
+use crate::roster::Roster;
+use crate::route::Route;
+use crate::run::{self, Run};
+use crate::say::{Said as Spoken, Say};
+use crate::store::Store;
+use crate::talk::Talk;
+use crate::task::{Outcome, Report, Status, Task};
+use crate::tools;
+use crate::transcript::Transcript;
+use crate::waiting::Waiting;
+use crate::turn::TurnCancel;
+
+/// The context window compaction is measured against.
+const CONTEXT_WINDOW: u64 = 128_000;
+
+/// Where in the window a line rotates.
+const COMPACT_AT: u64 = 60;
+
+/// How many messages survive a rotation.
+const KEEP: usize = 6;
+
+/// What a run reported, and what it needs answered.
+pub enum Event {
+    /// A harness stopped on a permission request.
+    Asked {
+        task: String,
+        ask: odiva_harness::Ask,
+        answer: oneshot::Sender<Decision>,
+    },
+    /// A run ended, one way or another.
+    Ended {
+        run: u64,
+        task: String,
+        outcome: std::result::Result<Turn, String>,
+    },
+}
+
+/// The person said something.
+pub struct Heard;
+
+/// Start every queued task the slots allow.
+pub struct Fill;
+
+/// Answer whatever a worker is stopped on.
+pub struct Permit {
+    pub task: String,
+    pub allow: bool,
+}
+
+/// Stop a task where it stands.
+pub struct CancelTask {
+    pub task: String,
+}
+
+/// She asked to be idle until something happens.
+pub struct AskIdle;
+
+pub struct Setup {
+    pub store: Store,
+    pub route: Arc<dyn Route>,
+    pub prompt: String,
+    pub out: mpsc::UnboundedSender<CoreMessage>,
+    pub records: ActorRef<Records>,
+    pub harness: Harness,
+    pub journal: Journal,
+    pub turn: TurnCancel,
+    pub waiting: Waiting,
+}
+
+pub struct Odiva {
+    store: Store,
+    ids: Ids,
+    route: Arc<dyn Route>,
+    prompt: String,
+    out: mpsc::UnboundedSender<CoreMessage>,
+    records: ActorRef<Records>,
+    harness: Harness,
+    journal: Journal,
+    parked: Parked,
+    waiting: Waiting,
+    turn: TurnCancel,
+    runs: HashMap<String, Run>,
+    permits: HashMap<String, oneshot::Sender<Decision>>,
+    next_run: u64,
+}
+
+impl Actor for Odiva {
+    type Args = Setup;
+    type Error = Error;
+
+    async fn on_start(args: Self::Args, _ctx: ActorRef<Self>) -> Result<Self> {
+        Ok(Self {
+            store: args.store,
+            ids: Ids::default(),
+            route: args.route,
+            prompt: args.prompt,
+            out: args.out,
+            records: args.records,
+            harness: args.harness,
+            journal: args.journal,
+            parked: Parked::default(),
+            waiting: args.waiting,
+            turn: args.turn,
+            runs: HashMap::new(),
+            permits: HashMap::new(),
+            next_run: 0,
+        })
+    }
+}
+
+impl Message<Heard> for Odiva {
+    type Reply = ();
+
+    async fn handle(&mut self, _heard: Heard, ctx: &mut Context<Self, Self::Reply>) {
+        while let Some(text) = self.waiting.next() {
+            self.journal.line(format!("对方：{text}"));
+
+            let user = self.ids.theirs(&text);
+            self.emit(CoreMessage::MessageAppended {
+                message: user.clone(),
+            });
+
+            self.answer(&user.markdown, Some(&user), ctx).await;
+        }
+    }
+}
+
+impl Message<Fill> for Odiva {
+    type Reply = ();
+
+    async fn handle(&mut self, _fill: Fill, ctx: &mut Context<Self, Self::Reply>) {
+        self.fill(ctx).await;
+    }
+}
+
+impl Message<Permit> for Odiva {
+    type Reply = ();
+
+    async fn handle(&mut self, permit: Permit, _ctx: &mut Context<Self, Self::Reply>) {
+        let Some(answer) = self.permits.remove(&permit.task) else {
+            return;
+        };
+
+        let decision = if permit.allow {
+            Decision::Allow
+        } else {
+            Decision::Refuse
+        };
+
+        let _ = answer.send(decision);
+        self.journal.line(format!(
+            "任务 {}：{}",
+            permit.task,
+            if permit.allow { "批了" } else { "拒了" }
+        ));
+
+        if let Some(mut task) = self.lookup(&permit.task).await {
+            task.status = Status::OnHarness;
+            self.update(task).await;
+        }
+    }
+}
+
+impl Message<CancelTask> for Odiva {
+    type Reply = ();
+
+    async fn handle(&mut self, cancel: CancelTask, ctx: &mut Context<Self, Self::Reply>) {
+        if let Some(run) = self.runs.remove(&cancel.task) {
+            run.cancel.cancel();
+        }
+
+        self.permits.remove(&cancel.task);
+
+        if let Some(mut task) = self.lookup(&cancel.task).await {
+            task.status = Status::Cancelled;
+            self.update(task).await;
+        }
+
+        self.fill(ctx).await;
+    }
+}
+
+impl Message<AskIdle> for Odiva {
+    type Reply = ();
+
+    async fn handle(&mut self, _ask: AskIdle, _ctx: &mut Context<Self, Self::Reply>) {
+        self.parked.park();
+    }
+}
+
+impl Message<Event> for Odiva {
+    type Reply = ();
+
+    async fn handle(&mut self, event: Event, ctx: &mut Context<Self, Self::Reply>) {
+        match event {
+            Event::Asked { task, ask, answer } => {
+                self.parked.wake();
+                self.journal
+                    .line(format!("任务 {task}：等你批准 {}", ask.title));
+
+                if let Some(mut record) = self.lookup(&task).await {
+                    record.status = Status::OnPermission(ask.title.clone());
+                    self.update(record).await;
+                }
+
+                self.permits.insert(task.clone(), answer);
+                self.notice(&task, ctx).await;
+            }
+            Event::Ended {
+                run,
+                task,
+                outcome,
+            } => {
+                if self.runs.get(&task).map(|running| running.id) != Some(run) {
+                    return;
+                }
+
+                self.runs.remove(&task);
+                self.permits.remove(&task);
+                self.settle(&task, outcome).await;
+                self.fill(ctx).await;
+                self.notice(&task, ctx).await;
+            }
+        }
+    }
+}
+
+impl Odiva {
+    /// Something happened outside the conversation: it enters her context and
+    /// nothing else, so the record stays a record of what was said.
+    async fn notice(&mut self, id: &str, ctx: &mut Context<Self, ()>) {
+        let Some(task) = self.lookup(id).await else {
+            return;
+        };
+
+        self.journal.line(format!("任务 {}：{}", task.id, task.line()));
+
+        if let Status::Failed(reason) = &task.status {
+            self.emit(CoreMessage::CoreFailed {
+                note: format!("{} 失败了：{reason}", task.id),
+            });
+        }
+
+        let text = format!(
+            "（后台的变化，不是对方说的）\n\n{}\n\n要不要说、说什么，你决定。",
+            brief::reading(&task)
+        );
+
+        self.answer(&text, None, ctx).await;
+    }
+
+    async fn answer(
+        &mut self,
+        text: &str,
+        user: Option<&WireMessage>,
+        ctx: &mut Context<Self, ()>,
+    ) {
+        self.presence(Presence::Typing);
+
+        let outcome = self.turn(text, user, ctx).await;
+
+        self.presence(Presence::Online);
+
+        if let Err(error) = outcome {
+            let note = format!("这一轮没跑完：{error}");
+
+            self.journal.line(format!("失败：{error}"));
+            self.emit(CoreMessage::CoreFailed { note: note.clone() });
+            eprintln!("odiva: {note}");
+        }
+    }
+
+    async fn turn(
+        &mut self,
+        text: &str,
+        user: Option<&WireMessage>,
+        ctx: &mut Context<Self, ()>,
+    ) -> Result<()> {
+        let spoken = Spoken::default();
+        let busy = self.in_busy().await;
+        let id = LineId::normal(if busy { Mode::Busy } else { Mode::Idle });
+
+        let jobs: Vec<String> = self
+            .records
+            .ask(ledger::Unfinished)
+            .await
+            .unwrap_or_default()
+            .iter()
+            .map(Task::line)
+            .collect();
+
+        let seed = busy.then(|| Handoff::of(user, &jobs).render());
+
+        let mut talk = Talk::open(
+            &self.store,
+            id,
+            &*self.route,
+            &self.prompt,
+            self.roster(ctx, &spoken, busy),
+            spoken,
+            seed,
+        )?;
+
+        if let Some(user) = user {
+            talk.note(user)?;
+        }
+
+        let cancel = self.turn.begin();
+        talk.run_until(text, &cancel).await?;
+        self.turn.end();
+
+        if !talk.spoke() && talk.failure().is_none() {
+            let cancel = self.turn.begin();
+            talk.run_until(AFTER_SILENCE, &cancel).await?;
+            self.turn.end();
+        }
+
+        let spoke = talk.spoke();
+        talk.flush()?;
+
+        if let Some(reason) = talk.failure() {
+            return Err(Error::Brain(reason));
+        }
+
+        match (&talk.monologue(), spoke) {
+            (Some(words), false) => self
+                .journal
+                .line(format!("她没说话；模型的原话：{words}")),
+            (None, false) => {
+                self.journal.line("她没说话；模型也没有回话");
+                return Err(Error::Brain(
+                    "模型没有回话（没有 key，或者 provider 报错）".to_owned(),
+                ));
+            }
+            _ => {}
+        }
+
+        if talk.used() * 100 >= CONTEXT_WINDOW * COMPACT_AT {
+            talk.compact(KEEP)?;
+        }
+
+        Ok(())
+    }
+
+    /// Busy is a fact, not a mode she chose: a task is unfinished and nobody has
+    /// asked for idle.
+    async fn in_busy(&mut self) -> bool {
+        if self.parked.is_parked() {
+            return false;
+        }
+
+        !self
+            .records
+            .ask(ledger::Unfinished)
+            .await
+            .unwrap_or_default()
+            .is_empty()
+    }
+
+    /// Starts queued tasks until every slot is busy.
+    async fn fill(&mut self, ctx: &mut Context<Self, ()>) {
+        loop {
+            if self.runs.len() >= brief::SLOTS {
+                return;
+            }
+
+            let unfinished = self
+                .records
+                .ask(ledger::Unfinished)
+                .await
+                .unwrap_or_default();
+
+            let Some(mut next) = unfinished
+                .into_iter()
+                .find(|task| task.status == Status::OnSlot)
+            else {
+                return;
+            };
+
+            if let Err(error) = std::fs::create_dir_all(&next.cwd) {
+                next.status = Status::Failed(format!("{}: {error}", next.cwd.display()));
+                self.update(next).await;
+                continue;
+            }
+
+            self.next_run += 1;
+            let run = run::start(self.next_run, &next, &self.harness, ctx.actor_ref().clone());
+            self.runs.insert(next.id.clone(), run);
+
+            next.status = Status::OnHarness;
+            self.update(next).await;
+        }
+    }
+
+    async fn settle(&mut self, id: &str, outcome: std::result::Result<Turn, String>) {
+        let Some(mut task) = self.lookup(id).await else {
+            return;
+        };
+
+        match outcome {
+            Ok(turn) => {
+                task.said = turn.said.clone();
+                task.report = Report::parse(&turn.said);
+                task.status = match task.report.as_ref().map(|report| &report.status) {
+                    Some(Outcome::Need) => Status::OnInstruction,
+                    Some(Outcome::Blocked) => Status::Failed(
+                        task.report
+                            .as_ref()
+                            .and_then(|report| report.question.clone())
+                            .unwrap_or_else(|| "卡住了".to_owned()),
+                    ),
+                    Some(Outcome::Done) | None => Status::Done,
+                };
+            }
+            Err(error) => task.status = Status::Failed(error),
+        }
+
+        self.update(task).await;
+    }
+
+    async fn lookup(&self, id: &str) -> Option<Task> {
+        self.records
+            .ask(ledger::Lookup { id: id.to_owned() })
+            .await
+            .ok()
+            .flatten()
+    }
+
+    async fn update(&self, task: Task) {
+        let _ = self.records.tell(ledger::Update(task)).await;
+    }
+
+    fn roster(
+        &self,
+        ctx: &mut Context<Self, ()>,
+        spoken: &Spoken,
+        busy: bool,
+    ) -> Roster {
+        let mut tools: Vec<Box<dyn yoagent::types::AgentTool>> = vec![Box::new(Say::new(
+            self.out.clone(),
+            self.ids.clone(),
+            spoken.clone(),
+        ))];
+
+        tools.extend(tools::roster(
+            self.records.clone(),
+            ctx.actor_ref().clone(),
+        ));
+
+        if busy {
+            tools.push(Box::new(crate::parked::RequestIdle::new(
+                ctx.actor_ref().clone(),
+            )));
+        }
+
+        Roster::of(tools).sourcing(Arc::new(self.waiting.clone()))
+    }
+
+    fn emit(&self, message: CoreMessage) {
+        let _ = self.out.send(message);
+    }
+
+    fn presence(&self, presence: Presence) {
+        self.emit(CoreMessage::PresenceChanged { presence });
+    }
+}
+
+/// The window's end of the wire.
+#[derive(Debug, Clone)]
+pub struct Handle {
+    out: mpsc::UnboundedSender<UiMessage>,
+}
+
+impl CoreHandle for Handle {
+    fn send(&self, message: UiMessage) {
+        let _ = self.out.send(message);
+    }
+}
+
+/// Starts the core and answers with the window's two ends of the wire.
+pub fn start(
+    store: Store,
+    route: Arc<dyn Route>,
+    prompt: impl Into<String>,
+    harness: Harness,
+) -> (Handle, mpsc::UnboundedReceiver<CoreMessage>) {
+    use kameo::actor::Spawn;
+
+    let (out, messages) = mpsc::unbounded_channel();
+    let journal = Journal::new(store.root().join("odiva.log"));
+
+    let snapshot = match Transcript::new(store.transcript()).read() {
+        Ok(messages) => Snapshot {
+            messages,
+            presence: Presence::Online,
+        },
+        Err(error) => {
+            let _ = out.send(CoreMessage::CoreFailed {
+                note: format!("读不了窗口的记录：{error}"),
+            });
+
+            Snapshot::default()
+        }
+    };
+
+    let _ = out.send(CoreMessage::CoreAttachedSession { snapshot });
+
+    let records = Records::spawn(ledger::Args {
+        dir: store.tasks(),
+        out: out.clone(),
+        journal: journal.clone(),
+    });
+
+    let turn = TurnCancel::default();
+    let waiting = Waiting::default();
+
+    let odiva = Odiva::spawn(Setup {
+        store: store.clone(),
+        route,
+        prompt: prompt.into(),
+        out,
+        records,
+        harness,
+        journal,
+        turn: turn.clone(),
+        waiting: waiting.clone(),
+    });
+
+    let (wire, mut inbox) = mpsc::unbounded_channel();
+
+    tokio::spawn(async move {
+        while let Some(message) = inbox.recv().await {
+            match message {
+                UiMessage::UserSubmittedText { text } => {
+                    waiting.offer(text);
+                    let _ = odiva.tell(Heard).await;
+                }
+                UiMessage::UserRequestedStop => turn.cancel(),
+            }
+        }
+    });
+
+    (Handle { out: wire }, messages)
+}

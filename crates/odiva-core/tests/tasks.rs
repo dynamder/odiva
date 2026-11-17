@@ -1,13 +1,8 @@
-//! The ledger, and what a worker's last turn meant.
-
-mod support;
+//! The records on disk: one file per task, and the envelope a turn ends with.
 
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::time::Duration;
 
-use odiva_core::task::{Origin, Status, Task};
-use odiva_core::{Harness, Tasks};
+use odiva_core::task::{Ledger, Origin, Outcome, Report, Status, Task};
 
 fn scratch(name: &str) -> PathBuf {
     let path = std::env::temp_dir().join(format!("odiva-tasks-{name}"));
@@ -16,151 +11,95 @@ fn scratch(name: &str) -> PathBuf {
     path
 }
 
-fn harness(script: &str) -> Harness {
-    Harness::new(support::fake_harness()).env("ODIVA_FAKE_SCRIPT", script)
-}
-
-/// Waits until the task stops holding a slot, or gives up.
-async fn settled(tasks: &Arc<Tasks>, id: &str) -> Task {
-    for _ in 0..200 {
-        let task = tasks.get(id).expect("the task is in the ledger");
-
-        if !task.status.holds_a_slot() && task.status != Status::OnSlot {
-            return task;
-        }
-
-        tokio::time::sleep(Duration::from_millis(25)).await;
-    }
-
-    panic!("the task never settled");
-}
-
-#[tokio::test]
-async fn a_worker_that_finishes_waits_for_the_next_thing() {
-    let (tasks, _nudges) =
-        Tasks::new(scratch("done"), harness("chat"), 3).expect("a ledger");
-
-    let id = tasks
-        .dispatch(Origin::User, "改一下 README 的启动命令".to_owned())
-        .expect("a task");
-
-    let task = settled(&tasks, &id).await;
-
-    assert_eq!(task.status, Status::OnTrigger);
-    assert!(task.said.contains("README 改完了"));
-    assert!(std::fs::metadata(std::path::Path::new(&task.cwd)).is_ok());
-}
-
-#[tokio::test]
-async fn a_worker_that_asks_waits_for_words() {
-    let (tasks, _nudges) = Tasks::new(scratch("need"), harness("need"), 3).expect("a ledger");
-
-    let id = tasks
-        .dispatch(Origin::User, "删掉 migrate_v1.sh".to_owned())
-        .expect("a task");
-
-    let task = settled(&tasks, &id).await;
-
-    assert_eq!(task.status, Status::OnInstruction, "said: {}", task.said);
-
-    let report = task.report.expect("the envelope");
-    assert_eq!(report.question.as_deref(), Some("这个脚本还有别处引用，删掉吗？"));
-}
-
-#[tokio::test]
-async fn a_worker_that_dies_is_a_failure_with_a_reason() {
-    let (tasks, _nudges) = Tasks::new(scratch("crash"), harness("crash"), 3).expect("a ledger");
-
-    let id = tasks
-        .dispatch(Origin::User, "随便干点什么".to_owned())
-        .expect("a task");
-
-    let task = settled(&tasks, &id).await;
-
-    match task.status {
-        Status::Failed(reason) => assert!(!reason.is_empty()),
-        other => panic!("a dead worker must fail, got {other:?}"),
+fn task(id: &str, status: Status) -> Task {
+    Task {
+        id: id.to_owned(),
+        origin: Origin::User,
+        cwd: PathBuf::from("somewhere"),
+        brief: "干点什么".to_owned(),
+        status,
+        report: None,
+        said: String::new(),
     }
 }
 
-#[tokio::test]
-async fn answering_an_asking_worker_gives_it_another_turn() {
-    let (tasks, _nudges) = Tasks::new(scratch("answer"), harness("need"), 3).expect("a ledger");
+#[test]
+fn a_record_survives_being_read_again() {
+    let dir = scratch("reload");
 
-    let id = tasks
-        .dispatch(Origin::User, "删掉 migrate_v1.sh".to_owned())
-        .expect("a task");
+    let mut ledger = Ledger::at(&dir).expect("a ledger");
+    let id = ledger.reserve();
+    ledger.put(task(&id, Status::Done)).expect("a record");
 
-    settled(&tasks, &id).await;
-    tasks.answer(&id, "别删，先全仓搜一遍").expect("an answer");
+    let again = Ledger::at(&dir).expect("a ledger");
+    let read = again.get(&id).expect("the record is still there");
 
-    let task = settled(&tasks, &id).await;
+    assert_eq!(read.status, Status::Done);
+    assert_eq!(read.brief, "干点什么");
+}
 
-    assert_eq!(task.status, Status::OnInstruction);
+#[test]
+fn the_next_id_is_past_everything_already_written() {
+    let dir = scratch("ids");
+
+    let mut ledger = Ledger::at(&dir).expect("a ledger");
+    let first = ledger.reserve();
+    ledger.put(task(&first, Status::Done)).expect("a record");
+
+    let mut again = Ledger::at(&dir).expect("a ledger");
+    let second = again.reserve();
+
+    assert_eq!(first, "t1");
+    assert_eq!(second, "t2");
+}
+
+#[test]
+fn only_a_running_task_holds_a_slot() {
+    assert!(Status::OnHarness.holds_a_slot());
     assert!(
-        task.brief.contains("别删，先全仓搜一遍"),
-        "the next worker is told what was said: {}",
-        task.brief
+        !Status::OnPermission("删一个文件".to_owned()).holds_a_slot(),
+        "a worker waiting on an answer is not burning a turn"
     );
+    assert!(!Status::Paused.holds_a_slot());
+    assert!(!Status::Done.holds_a_slot());
 }
 
-#[tokio::test]
-async fn the_ledger_survives_being_read_again() {
-    let root = scratch("reload");
-    let (tasks, _nudges) = Tasks::new(root.clone(), harness("chat"), 3).expect("a ledger");
+#[test]
+fn only_live_work_is_unfinished() {
+    let dir = scratch("unfinished");
 
-    let id = tasks
-        .dispatch(Origin::User, "留下一条记录".to_owned())
-        .expect("a task");
-    settled(&tasks, &id).await;
-
-    let (again, _nudges) = Tasks::new(root, harness("chat"), 3).expect("a ledger");
-    let task = again.get(&id).expect("the task is still there");
-
-    assert_eq!(task.status, Status::OnTrigger);
-    assert_eq!(task.brief, "留下一条记录");
-}
-
-#[tokio::test]
-async fn a_worker_that_asks_waits_on_a_verdict() {
-    let (tasks, _nudges) =
-        Tasks::new(scratch("permit"), harness("permission"), 3).expect("a ledger");
-
-    let id = tasks
-        .dispatch(Origin::User, "删掉 migrate_v1.sh".to_owned())
-        .expect("a task");
-
-    let mut asked = None;
-
-    for _ in 0..200 {
-        let task = tasks.get(&id).expect("the task is in the ledger");
-
-        if let Status::OnPermission(question) = &task.status {
-            asked = Some(question.clone());
-            break;
-        }
-
-        tokio::time::sleep(Duration::from_millis(25)).await;
+    let mut ledger = Ledger::at(&dir).expect("a ledger");
+    for status in [
+        Status::OnHarness,
+        Status::Paused,
+        Status::Done,
+        Status::Cancelled,
+    ] {
+        let id = ledger.reserve();
+        ledger.put(task(&id, status)).expect("a record");
     }
 
-    let question = asked.expect("the worker asked before it was allowed to act");
-    assert!(
-        question.contains("migrate_v1.sh"),
-        "the question carries the tool call's title: {question}"
-    );
+    let live: Vec<_> = ledger.unfinished().into_iter().map(|task| task.status).collect();
 
-    tasks.permit(&id, false).expect("a verdict");
-
-    let task = settled(&tasks, &id).await;
-    assert!(
-        task.said.contains("denied:reject-once"),
-        "the worker was told no, by name: {}",
-        task.said
-    );
+    assert_eq!(live, vec![Status::OnHarness]);
 }
 
-#[tokio::test]
-async fn a_spent_day_does_not_follow_anyone_into_the_next_one() {
+#[test]
+fn a_report_is_read_from_the_last_block() {
+    let said = "做了一半。\n\n```report\n{\"status\": \"need\", \"question\": \"删掉吗？\"}\n```";
+    let report = Report::parse(said).expect("the envelope");
+
+    assert_eq!(report.status, Outcome::Need);
+    assert_eq!(report.question.as_deref(), Some("删掉吗？"));
+}
+
+#[test]
+fn words_without_an_envelope_are_a_finish() {
+    assert_eq!(Report::parse("做完了，没有信封"), None);
+}
+
+#[test]
+fn a_spent_day_does_not_follow_anyone_into_the_next_one() {
     use odiva_core::budget::{self, Budget};
 
     let store = odiva_core::Store::new(scratch("budget"));

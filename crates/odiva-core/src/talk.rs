@@ -6,6 +6,7 @@
 //! state to recover.
 
 use odiva_proto::WireMessage;
+use tokio_util::sync::CancellationToken;
 use yoagent::Agent;
 use yoagent::types::{AgentMessage, Content, Message, StopReason};
 
@@ -121,13 +122,29 @@ impl Talk {
 
     /// Runs one turn. What the model does, it does through its tools.
     ///
-    /// Dropping the returned future aborts the run, which is how the person's
-    /// "stop" reaches a model that is already answering.
+    /// Dropping the future aborts the run, which is how the person's "stop"
+    /// reaches a model that is already answering.
     pub async fn run(&mut self, prompt: &str) -> Result<()> {
+        self.run_until(prompt, &CancellationToken::new()).await
+    }
+
+    pub async fn run_until(
+        &mut self,
+        prompt: &str,
+        cancel: &CancellationToken,
+    ) -> Result<()> {
         let (events, mut stream) = tokio::sync::mpsc::unbounded_channel();
         let drained = tokio::spawn(async move { while stream.recv().await.is_some() {} });
 
-        self.agent.prompt_with_sender(prompt, events).await;
+        {
+            let running = self.agent.prompt_with_sender(prompt, events);
+            tokio::pin!(running);
+
+            tokio::select! {
+                _ = &mut running => {}
+                _ = cancel.cancelled() => {}
+            }
+        }
 
         drained.await.ok();
         Ok(())

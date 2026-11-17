@@ -318,6 +318,20 @@ impl Worker {
     pub async fn talk_refusing(&self, prompt: &str) -> crate::Result<Turn> {
         self.talk(prompt, Arc::new(Refuse)).await
     }
+
+    /// A turn that can be cut short. Dropping `talk` drops the child with it,
+    /// which is the only way to stop a harness that has stopped listening.
+    pub async fn talk_until(
+        &self,
+        prompt: &str,
+        permission: Arc<dyn Permission>,
+        cancel: tokio_util::sync::CancellationToken,
+    ) -> crate::Result<Turn> {
+        tokio::select! {
+            result = self.talk(prompt, permission) => result,
+            _ = cancel.cancelled() => Err(crate::Error::Harness("这一轮被叫停".to_owned())),
+        }
+    }
 }
 
 /// Answers by name, never by position: the narrow form of whatever was decided,

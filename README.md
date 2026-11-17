@@ -67,12 +67,12 @@ The window is connected to the core. `main` starts the runtime and the `Odiva` a
 `App::subscription` turns its `CoreMessage`s into `Message::CoreReported`, so the
 only thing that can change the transcript is still `App::apply`.
 
-**The docs are ahead of the code.** `docs/007-core.md` is the agreed model; the code is
-still on the old one (an engine that builds a short-lived activation per turn and derives
-"busy" from the ledger). [003](docs/003-plan.md) lists the migration: P1 is done (the ACP
-client is its own crate), P2 moves lines onto `yoagent::Session`, P3 replaces the engine
-with the `Odiva`/`Ledger` actors, P4 adds the state machine and the four rosters, P5 adds
-compaction and `view_history`.
+**The docs are still ahead of the code, by one phase.** `docs/007-core.md` is the agreed
+model. [003](docs/003-plan.md) lists the migration: P1 (ACP as its own crate), P2 (lines on
+`yoagent::Session`, a separate transcript) and P3 (the `Odiva` and `Records` actors replacing
+the engine) are done. What is left is P4 — the explicit state machine, the four rosters, and
+the question card — and P5's real compaction and `view_history`. Until then "busy" is still
+derived from the ledger, and the tool table is still two rosters rather than four.
 
 A turn still needs a harness on `PATH` and a model credential; without them the
 window opens and attaches, and a turn fails with a sentence on stderr.

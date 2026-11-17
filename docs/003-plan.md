@@ -35,12 +35,12 @@ P4 之前就能验证最关键的假设：**状态是她的决定、线是记录
 | `crates/odiva-proto` | 四个 `CoreMessage` + 两个 `UiMessage`；提问组件尚未加（P4） |
 | `crates/odiva-harness` | **P1 完成**：ACP 客户端、结构化 `Ask`、`Harness`、假 harness 与它的测试 |
 | `crates/odiva` | 聊天窗口：markdown、文件、快捷回复、时间分隔、虚拟化、贴底与跟随；接上 core |
-| `crates/odiva-core` | **P2 完成**：`line/` 用 `yoagent::Session` 存上下文（工具调用进历史），`transcript.jsonl` 单独记窗口的东西；engine 仍按旧模型推导忙碌 |
+| `crates/odiva-core` | **P3 完成**：`Odiva` 与 `Records` 两个 actor 取代 engine 与 tasks；`line/` 用 `yoagent::Session` 存上下文，`transcript.jsonl` 单独记窗口的东西 |
 | `crates/ericed` | vendor 自 `../sofaia`，编译通过，示例自带断言 |
 | 文档 | P0 完成：007 是新设计的唯一出处 |
 
-代码仍在旧模型上（`Engine` 每轮一次激活、从台账推导忙碌），与新文档的差异见
-[007](007-core.md) §13 的对照表。P3 开始换成 `Odiva` / `Ledger` actor。
+P4 之前的差异只剩状态机部分：忙碌仍由台账推导（没有 `accept_task` / `request_idle` 的转换），
+工具表还是两个而不是四个，提权还没有策略。P4 一次补齐。
 
 ## 阻塞（不是设计问题）
 

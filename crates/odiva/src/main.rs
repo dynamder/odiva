@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 
 use iced::Task;
 use odiva::App;
-use odiva_core::{Engine, Harness, Journal, Model, Route, Store, prompt};
+use odiva_core::{Harness, Journal, Model, Route, Store, prompt, start};
 use yoagent::provider::ModelConfig;
 
 fn main() -> iced::Result {
@@ -33,10 +33,7 @@ fn main() -> iced::Result {
         "deepseek-flash",
         "DeepSeek Flash",
     )));
-    let (engine, handle, messages) =
-        Engine::new(store, route, prompt::idle(), harness).expect("the engine starts");
-
-    runtime.spawn(engine.run());
+    let (handle, messages) = runtime.block_on(async { start(store, route, prompt::idle(), harness) });
 
     let mut app = App::empty().connected(handle, messages);
 

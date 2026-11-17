@@ -11,7 +11,7 @@ use std::io::{BufRead, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use odiva_core::{Engine, Harness, Model, Route, Store, prompt};
+use odiva_core::{Harness, Model, Route, Store, prompt, start};
 use odiva_proto::{CoreHandle, CoreMessage, Side, UiMessage};
 use yoagent::provider::ModelConfig;
 
@@ -41,9 +41,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("odiva: 日志 {}", journal.path().display());
     println!("odiva: 输入一句话回车；空行退出。");
 
-    let (engine, handle, mut messages) = Engine::new(store, route, prompt::idle(), harness)?;
-
-    tokio::spawn(engine.run());
+    let (handle, mut messages) = start(store, route, prompt::idle(), harness);
     tokio::spawn(async move {
         while let Some(message) = messages.recv().await {
             println!("{}", show(&message));

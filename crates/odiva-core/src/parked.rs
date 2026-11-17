@@ -7,9 +7,11 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use async_trait::async_trait;
+use kameo::actor::ActorRef;
 use serde_json::{Value, json};
 use yoagent::types::{AgentTool, Content, ToolContext, ToolError, ToolResult};
+
+use crate::odiva::{AskIdle, Odiva};
 
 /// Whether she has asked to be idle until something happens.
 #[derive(Debug, Clone, Default)]
@@ -32,18 +34,18 @@ impl Parked {
     }
 }
 
-/// The tool that parks the busy period.
+/// The tool that asks to go idle.
 pub struct RequestIdle {
-    parked: Parked,
+    odiva: ActorRef<Odiva>,
 }
 
 impl RequestIdle {
-    pub fn new(parked: Parked) -> Self {
-        Self { parked }
+    pub fn new(odiva: ActorRef<Odiva>) -> Self {
+        Self { odiva }
     }
 }
 
-#[async_trait]
+#[async_trait::async_trait]
 impl AgentTool for RequestIdle {
     fn name(&self) -> &str {
         "request_idle"
@@ -63,7 +65,7 @@ impl AgentTool for RequestIdle {
     }
 
     async fn execute(&self, _params: Value, ctx: ToolContext) -> Result<ToolResult, ToolError> {
-        self.parked.park();
+        let _ = self.odiva.tell(AskIdle).await;
         ctx.cancel.cancel();
 
         Ok(ToolResult {

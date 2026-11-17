@@ -22,16 +22,22 @@ pub enum Status {
     OnPermission(String),
     /// Waiting for a free slot.
     OnSlot,
+    /// Paused: the person went back to idle and everything stopped.
+    Paused,
     /// Done, waiting for the next thing.
-    OnTrigger,
+    Done,
+    /// Stopped on purpose — by her or by the person, not by a failure.
+    Cancelled,
     /// It failed, with a reason worth keeping.
     Failed(String),
 }
 
 impl Status {
-    /// Whether this task is occupying a slot.
+    /// Whether this task is occupying a run. A task blocked on a permission is
+    /// a live process but not a running turn, and counting it would deadlock a
+    /// queue where every task is waiting to be answered.
     pub fn holds_a_slot(&self) -> bool {
-        matches!(self, Self::OnHarness | Self::OnPermission(_))
+        matches!(self, Self::OnHarness)
     }
 
     pub fn card(&self) -> &'static str {
@@ -40,7 +46,9 @@ impl Status {
             Self::OnInstruction => "等你说话",
             Self::OnPermission(_) => "等你批准",
             Self::OnSlot => "排队",
-            Self::OnTrigger => "已完成",
+            Self::Paused => "暂停",
+            Self::Done => "已完成",
+            Self::Cancelled => "已停止",
             Self::Failed(_) => "失败",
         }
     }
@@ -50,7 +58,7 @@ impl Status {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Origin {
     User,
-    Own,
+    Interest,
 }
 
 /// What the worker said about itself. The words are the protocol: a worker
@@ -218,7 +226,10 @@ impl Ledger {
             .filter(|task| {
                 matches!(
                     task.status,
-                    Status::OnHarness | Status::OnInstruction | Status::OnPermission(_) | Status::OnSlot
+                    Status::OnHarness
+                        | Status::OnInstruction
+                        | Status::OnPermission(_)
+                        | Status::OnSlot
                 )
             })
             .cloned()
